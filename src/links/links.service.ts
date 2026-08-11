@@ -407,11 +407,12 @@ export class LinksService {
         null,
         expiresAt ?? undefined,
         Boolean(passwordHash),
-        {
-          userId: String(currentUser._id),
-          organizationId: currentUser.organizationId?.toString?.() ?? null,
-          linkId: link._id.toString(),
-        },
+          {
+            userId: String(currentUser._id),
+            organizationId: currentUser.organizationId?.toString?.() ?? null,
+            linkId: link._id.toString(),
+            replyTo: currentUser.email ?? null,
+          },
       );
     }
     return {

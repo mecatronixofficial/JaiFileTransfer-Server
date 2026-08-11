@@ -288,6 +288,8 @@ export class AdminService {
   ========================= */
   async getDashboardStats(currentUser: any) {
     const last7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
     const isSuperAdmin = currentUser.role === Role.SUPERADMIN;
 
     let managedUserIds: Types.ObjectId[] = [];
@@ -326,6 +328,11 @@ export class AdminService {
       transferLinks,
       shareLinks,
       auditLogs,
+      linkEngagement,
+      transfersToday,
+      downloadsToday,
+      newUsersToday,
+      uploadsToday,
     ] = await Promise.all([
       this.userModel.countDocuments(userFilter),
       this.userModel.countDocuments({ ...userFilter, isActive: true }),
@@ -368,6 +375,40 @@ export class AdminService {
       this.linkModel.countDocuments({ ...linkFilter, type: 'transfer' }),
       this.linkModel.countDocuments({ ...linkFilter, type: 'share' }),
       isSuperAdmin ? this.getAuditLogs(currentUser, 10) : Promise.resolve([]),
+      this.linkModel.aggregate<{ totalDownloads: number; totalViews: number }>([
+        { $match: linkFilter },
+        {
+          $group: {
+            _id: null,
+            totalDownloads: { $sum: { $ifNull: ['$downloads', 0] } },
+            totalViews: { $sum: { $ifNull: ['$views', 0] } },
+          },
+        },
+      ]),
+      this.transferModel.countDocuments({
+        ...transferFilter,
+        createdAt: { $gte: startOfToday },
+      }),
+      this.transferModel.aggregate<{ total: number }>([
+        { $match: transferFilter },
+        { $unwind: '$activity' },
+        {
+          $match: {
+            'activity.action': 'download',
+            'activity.createdAt': { $gte: startOfToday },
+          },
+        },
+        { $count: 'total' },
+      ]),
+      this.userModel.countDocuments({
+        ...userFilter,
+        createdAt: { $gte: startOfToday },
+      }),
+      this.fileModel.countDocuments({
+        ...fileFilter,
+        isDeleted: false,
+        createdAt: { $gte: startOfToday },
+      }),
     ]);
 
     const totalBytes = totalStorage[0]?.totalBytes ?? 0;
@@ -382,8 +423,32 @@ export class AdminService {
       'disabled',
     ]);
     const linkTypes = this.countsToRecord(linksByType, ['share', 'transfer']);
+    const engagement = linkEngagement[0] ?? {
+      totalDownloads: 0,
+      totalViews: 0,
+    };
+
+    const flatOverview = {
+      totalUsers,
+      activeUsers,
+      totalFiles,
+      totalStorage: totalBytes,
+      totalStorageUsed: totalBytes,
+      totalTransfers,
+      totalDownloads: engagement.totalDownloads,
+      totalViews: engagement.totalViews,
+      activeLinks,
+      expiredLinks: linkStatus.expired,
+      disabledLinks: linkStatus.disabled,
+      newUsersToday,
+      uploadsToday,
+      recentUploads: uploadsToday,
+      transfersToday,
+      downloadsToday: downloadsToday[0]?.total ?? 0,
+    };
 
     return {
+      ...flatOverview,
       users: {
         total: totalUsers,
         active: activeUsers,

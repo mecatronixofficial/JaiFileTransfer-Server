@@ -33,6 +33,8 @@ import { NotificationType } from '../notifications/schemas/notification.schema';
 const SALT_ROUNDS = 10;
 const MAX_VIEWER_ENTRIES = 100;
 const MAX_ACTIVITY_ENTRIES = 500;
+const DAY_MS = 86_400_000;
+const EXPIRY_REMINDER_DAYS = [3, 2, 1] as const;
 
 type ViewerInfo = {
   ip: string;
@@ -78,8 +80,7 @@ export class TransfersService {
       this.configService.get<string>('app.frontendUrl') ??
       'http://localhost:3000';
     this.transferUrlBase =
-      this.configService.get<string>('app.transferUrlBase') ??
-      this.frontendUrl;
+      this.configService.get<string>('app.transferUrlBase') ?? this.frontendUrl;
   }
 
   /* ═════════════════════════════
@@ -87,7 +88,101 @@ export class TransfersService {
   ═════════════════════════════ */
   @Cron(CronExpression.EVERY_HOUR)
   async expireTransfers() {
+    await this.sendExpiryReminders();
     await this.syncExpiredTransfers();
+  }
+
+  private async sendExpiryReminders(now = new Date()) {
+    const reminderWindowEnd = new Date(now.getTime() + 3 * DAY_MS);
+    const transfers = await this.transferModel
+      .find({
+        status: 'active',
+        expiresAt: { $gt: now, $lte: reminderWindowEnd },
+      })
+      .select(
+        '_id senderId organizationId linkId title expiresAt fileCount totalSize expiryReminderDaysSent',
+      )
+      .lean<TransferDocument[]>()
+      .exec();
+
+    if (!transfers.length) return;
+
+    const senderIds = [
+      ...new Set(transfers.map((transfer) => transfer.senderId.toString())),
+    ].map((id) => new Types.ObjectId(id));
+    const senders = await this.userModel
+      .find({ _id: { $in: senderIds }, isActive: true })
+      .select('name email notificationPreferences.systemUpdates')
+      .lean<
+        Array<{
+          _id: Types.ObjectId;
+          name: string;
+          email: string;
+          notificationPreferences?: { systemUpdates?: boolean };
+        }>
+      >()
+      .exec();
+    const sendersById = new Map(
+      senders.map((sender) => [sender._id.toString(), sender]),
+    );
+
+    await Promise.allSettled(
+      transfers.map(async (transfer) => {
+        const daysRemaining = Math.ceil(
+          (transfer.expiresAt.getTime() - now.getTime()) / DAY_MS,
+        );
+        if (
+          !EXPIRY_REMINDER_DAYS.includes(
+            daysRemaining as (typeof EXPIRY_REMINDER_DAYS)[number],
+          ) ||
+          transfer.expiryReminderDaysSent?.includes(daysRemaining)
+        ) {
+          return;
+        }
+
+        const sender = sendersById.get(transfer.senderId.toString());
+        if (
+          !sender?.email ||
+          sender.notificationPreferences?.systemUpdates === false
+        ) {
+          return;
+        }
+
+        const claimedTransfer = await this.transferModel.findOneAndUpdate(
+          {
+            _id: transfer._id,
+            status: 'active',
+            expiresAt: transfer.expiresAt,
+            expiryReminderDaysSent: { $ne: daysRemaining },
+          },
+          { $addToSet: { expiryReminderDaysSent: daysRemaining } },
+          { new: true },
+        );
+        if (!claimedTransfer) return;
+
+        const sent = await this.mailService.sendTransferExpiryReminderEmail(
+          sender.email,
+          sender.name,
+          transfer.title,
+          daysRemaining as 1 | 2 | 3,
+          transfer.expiresAt,
+          transfer.fileCount,
+          transfer.totalSize,
+          {
+            userId: transfer.senderId.toString(),
+            organizationId: transfer.organizationId?.toString?.() ?? null,
+            transferId: transfer._id.toString(),
+            linkId: transfer.linkId?.toString?.() ?? null,
+          },
+        );
+
+        if (!sent) {
+          await this.transferModel.findByIdAndUpdate(transfer._id, {
+            $pull: { expiryReminderDaysSent: daysRemaining },
+          });
+        }
+      }),
+    );
   }
 
   private async syncExpiredTransfers(now = new Date()) {
@@ -136,9 +231,7 @@ export class TransfersService {
   private normalizeEmails(emails: string[] = []): string[] {
     return [
       ...new Set(
-        emails
-          .map((email) => email.toLowerCase().trim())
-          .filter(Boolean),
+        emails.map((email) => email.toLowerCase().trim()).filter(Boolean),
       ),
     ];
   }
@@ -193,12 +286,14 @@ export class TransfersService {
 
   private async notifyTransferAccess(
     transfer: TransferDocument,
-    type: NotificationType.TRANSFER_VIEWED | NotificationType.TRANSFER_DOWNLOADED,
+    type:
+      | NotificationType.TRANSFER_VIEWED
+      | NotificationType.TRANSFER_DOWNLOADED,
     viewerInfo: ViewerInfo,
     metadata: Record<string, any> = {},
   ) {
     const isDownload = type === NotificationType.TRANSFER_DOWNLOADED;
-    await this.notificationsService.create({
+    const notificationPromise = this.notificationsService.create({
       userId: transfer.senderId.toString(),
       organizationId: transfer.organizationId?.toString?.() ?? null,
       type,
@@ -211,9 +306,65 @@ export class TransfersService {
         linkId: transfer.linkId?.toString?.() ?? null,
         ip: viewerInfo.ip,
         location: viewerInfo.location,
+        device: viewerInfo.device,
+        browser: viewerInfo.browser,
+        os: viewerInfo.os,
         ...metadata,
       },
     });
+
+    if (!isDownload) {
+      await notificationPromise;
+      return;
+    }
+
+    const sender = await this.userModel
+      .findById(transfer.senderId)
+      .select('name email notificationPreferences.downloadActivity')
+      .lean<{
+        name: string;
+        email: string;
+        notificationPreferences?: { downloadActivity?: boolean };
+      }>()
+      .exec();
+
+    const emailPromise =
+      sender?.email &&
+      sender.notificationPreferences?.downloadActivity !== false
+        ? this.mailService.sendTransferDownloadedEmail(
+            sender.email,
+            sender.name,
+            transfer.title,
+            {
+              itemName:
+                metadata.fileName ??
+                metadata.zipName ??
+                transfer.title ??
+                'Transfer',
+              downloadType: metadata.fileName
+                ? 'file'
+                : metadata.folderPath
+                  ? 'folder'
+                  : 'all',
+              fileCount: metadata.fileCount,
+              totalSize: metadata.totalSize,
+              ip: viewerInfo.ip,
+              location: viewerInfo.location,
+              device: viewerInfo.device,
+              browser: viewerInfo.browser,
+              os: viewerInfo.os,
+              downloadedAt: metadata.downloadedAt ?? new Date(),
+            },
+            {
+              userId: transfer.senderId.toString(),
+              organizationId: transfer.organizationId?.toString?.() ?? null,
+              transferId: transfer._id.toString(),
+              linkId: transfer.linkId?.toString?.() ?? null,
+            },
+          )
+        : Promise.resolve();
+
+    await Promise.allSettled([notificationPromise, emailPromise]);
   }
 
   /* ═════════════════════════════
@@ -224,6 +375,7 @@ export class TransfersService {
     senderId: string,
     senderName: string,
     organizationId?: string | null,
+    senderEmail?: string | null,
   ) {
     /* 1 — resolve selected file/folder metadata from DB */
     const senderObjectId = new Types.ObjectId(senderId);
@@ -435,10 +587,14 @@ export class TransfersService {
     if (dto.expiresAt) {
       expiresAt = new Date(dto.expiresAt);
       if (expiresAt.getTime() <= now) {
-        throw new BadRequestException('Expiry date and time must be in the future');
+        throw new BadRequestException(
+          'Expiry date must be today or later',
+        );
       }
       if (expiresAt.getTime() > maxExpiresAt) {
-        throw new BadRequestException('Expiry date and time cannot be more than 365 days from now');
+        throw new BadRequestException(
+          'Expiry date cannot be more than 365 days from now',
+        );
       }
     } else {
       const expiryDays = dto.expiry ?? 7;
@@ -552,6 +708,7 @@ export class TransfersService {
             organizationId: organizationId ?? null,
             transferId: transfer._id.toString(),
             linkId: link._id.toString(),
+            replyTo: senderEmail ?? null,
           },
         )
         .catch((err) =>
@@ -741,7 +898,7 @@ export class TransfersService {
             fileCount: link.fileCount,
             totalSize: link.totalSize,
             createdAt: (link as any).createdAt,
-        }
+          }
         : null,
       isReceived: !isSender && isRecipient,
     };
@@ -762,21 +919,20 @@ export class TransfersService {
       starred,
       distinctRecipients,
       downloadStats,
-    ] =
-      await Promise.all([
-        this.transferModel.countDocuments({ senderId: userOid }),
-        this.linkModel.countDocuments({ senderId: userOid, status: 'active' }),
-        this.transferModel.countDocuments({ recipients: recipientQuery }),
-        this.transferModel.countDocuments({ starredBy: userOid }),
-        this.transferModel.distinct('recipients', {
-          senderId: userOid,
-          method: 'email',
-        }),
-        this.transferModel.aggregate<{ totalDownloads: number }>([
-          { $match: { senderId: userOid } },
-          { $group: { _id: null, totalDownloads: { $sum: '$downloads' } } },
-        ]),
-      ]);
+    ] = await Promise.all([
+      this.transferModel.countDocuments({ senderId: userOid }),
+      this.linkModel.countDocuments({ senderId: userOid, status: 'active' }),
+      this.transferModel.countDocuments({ recipients: recipientQuery }),
+      this.transferModel.countDocuments({ starredBy: userOid }),
+      this.transferModel.distinct('recipients', {
+        senderId: userOid,
+        method: 'email',
+      }),
+      this.transferModel.aggregate<{ totalDownloads: number }>([
+        { $match: { senderId: userOid } },
+        { $group: { _id: null, totalDownloads: { $sum: '$downloads' } } },
+      ]),
+    ]);
 
     const selfTransfers = await this.transferModel.countDocuments({
       senderId: userOid,
@@ -865,7 +1021,11 @@ export class TransfersService {
     if (!result) throw new NotFoundException('Transfer not found');
   }
 
-  async getStarred(userId: string, userEmail: string | undefined, dto: ListTransfersDto) {
+  async getStarred(
+    userId: string,
+    userEmail: string | undefined,
+    dto: ListTransfersDto,
+  ) {
     await this.syncExpiredTransfers();
 
     const page = dto.page ?? 1;
@@ -1026,6 +1186,7 @@ export class TransfersService {
     await Promise.all([
       this.transferModel.findByIdAndUpdate(id, {
         expiresAt: newExpiry,
+        expiryReminderDaysSent: [],
         ...(transfer.status === 'expired' ? { status: 'active' } : {}),
         $push: {
           activity: {
@@ -1091,8 +1252,19 @@ export class TransfersService {
   ═════════════════════════════ */
   async getAdminStats() {
     await this.syncExpiredTransfers();
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
 
-    const [total, active, expired, disabled, sizeResult] = await Promise.all([
+    const [
+      total,
+      active,
+      expired,
+      disabled,
+      sizeResult,
+      engagementResult,
+      transfersToday,
+      downloadsToday,
+    ] = await Promise.all([
       this.transferModel.countDocuments(),
       this.transferModel.countDocuments({ status: 'active' }),
       this.transferModel.countDocuments({ status: 'expired' }),
@@ -1100,21 +1272,58 @@ export class TransfersService {
       this.transferModel.aggregate<{ total: number }>([
         { $group: { _id: null, total: { $sum: '$totalSize' } } },
       ]),
+      this.transferModel.aggregate<{
+        totalDownloads: number;
+        totalViews: number;
+      }>([
+        {
+          $group: {
+            _id: null,
+            totalDownloads: { $sum: { $ifNull: ['$downloads', 0] } },
+            totalViews: { $sum: { $ifNull: ['$views', 0] } },
+          },
+        },
+      ]),
+      this.transferModel.countDocuments({ createdAt: { $gte: startOfToday } }),
+      this.transferModel.aggregate<{ total: number }>([
+        { $unwind: '$activity' },
+        {
+          $match: {
+            'activity.action': 'download',
+            'activity.createdAt': { $gte: startOfToday },
+          },
+        },
+        { $count: 'total' },
+      ]),
     ]);
+
+    const engagement = engagementResult[0] ?? {
+      totalDownloads: 0,
+      totalViews: 0,
+    };
 
     return {
       total,
+      totalTransfers: total,
       active,
       expired,
       disabled,
       totalSize: sizeResult[0]?.total ?? 0,
+      totalDownloads: engagement.totalDownloads,
+      totalViews: engagement.totalViews,
+      transfersToday,
+      downloadsToday: downloadsToday[0]?.total ?? 0,
     };
   }
 
   /* ═════════════════════════════
      PUBLIC VIEW (unauthenticated)
   ═════════════════════════════ */
-  async publicView(shortCode: string, viewerInfo: ViewerInfo, password?: string) {
+  async publicView(
+    shortCode: string,
+    viewerInfo: ViewerInfo,
+    password?: string,
+  ) {
     const link = await this.linkModel.findOne({ shortCode });
     if (!link) throw new NotFoundException('Link not found');
     if (link.status === 'disabled')
@@ -1140,8 +1349,7 @@ export class TransfersService {
     if (!transfer) throw new NotFoundException('Transfer not found');
 
     if (transfer.hasPassword) {
-      if (!password)
-        throw new ForbiddenException('Password required');
+      if (!password) throw new ForbiddenException('Password required');
       const ok = await bcrypt.compare(password, transfer.passwordHash ?? '');
       if (!ok) throw new ForbiddenException('Incorrect password');
     }
@@ -1289,7 +1497,12 @@ export class TransfersService {
       transfer,
       NotificationType.TRANSFER_DOWNLOADED,
       viewerInfo,
-      { fileId, fileName: file.originalName },
+      {
+        fileId,
+        fileName: file.originalName,
+        totalSize: file.size,
+        downloadedAt: now,
+      },
     ).catch(() => undefined);
 
     return { downloadUrl, fileName: file.originalName, size: file.size };
@@ -1351,12 +1564,10 @@ export class TransfersService {
       : transfer.files;
 
     if (filesToZip.length === 0) {
-      res
-        .status(404)
-        .json({
-          success: false,
-          message: 'No files found for the specified folder',
-        });
+      res.status(404).json({
+        success: false,
+        message: 'No files found for the specified folder',
+      });
       return;
     }
 
@@ -1436,8 +1647,10 @@ export class TransfersService {
       viewerInfo,
       {
         fileCount: filesToZip.length,
+        totalSize: filesToZip.reduce((sum, file) => sum + file.size, 0),
         folderPath: normalizedFolder ?? null,
         zipName,
+        downloadedAt: now,
       },
     ).catch(() => undefined);
   }

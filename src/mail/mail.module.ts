@@ -3,8 +3,8 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { ConfigModule } from '@nestjs/config';
 
 import { MailService } from './mail.service';
+import { SmtpService } from './smtp.service';
 import { MailController } from './mail.controller';
-import { WebhookController } from './webhook.controller';
 import { MailLog, MailLogSchema } from './schemas/mail-log.schema';
 
 @Global()
@@ -13,8 +13,8 @@ import { MailLog, MailLogSchema } from './schemas/mail-log.schema';
     ConfigModule,
     MongooseModule.forFeature([{ name: MailLog.name, schema: MailLogSchema }]),
   ],
-  controllers: [MailController, WebhookController],
-  providers: [MailService],
-  exports: [MailService],
+  controllers: [MailController],
+  providers: [MailService, SmtpService],
+  exports: [MailService, SmtpService],
 })
 export class MailModule {}

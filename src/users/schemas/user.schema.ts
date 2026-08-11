@@ -68,6 +68,16 @@ export class User {
   @Prop({ type: String, default: null, trim: true })
   avatar: string | null;
 
+  @Prop({ type: String, default: null, trim: true })
+  profileBanner: string | null;
+
+  /** Private R2 object keys. Public API responses expose only proxy URLs. */
+  @Prop({ type: String, default: null, select: false })
+  avatarKey: string | null;
+
+  @Prop({ type: String, default: null, select: false })
+  profileBannerKey: string | null;
+
   @Prop({ trim: true, maxlength: 100 })
   department: string;
 
@@ -81,6 +91,9 @@ export class User {
 
   @Prop({ default: true })
   isActive: boolean;
+
+  @Prop({ type: Number, default: 0, index: true })
+  sortOrder: number;
 
   @Prop({ default: false })
   isEmailVerified: boolean;
@@ -120,7 +133,7 @@ export class User {
 
   /* ── Storage ────────────────────────────────── */
 
-  @Prop({ default: 10 * 1024 * 1024 * 1024, min: 100 * 1024 * 1024 })
+  @Prop({ default: 0, min: 0 })
   storageQuota: number;
 
   @Prop({ default: 0, min: 0 })

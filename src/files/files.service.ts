@@ -30,7 +30,6 @@ import { Role, ShareType, ResourceType } from '../common/enums';
 @Injectable()
 export class FilesService {
   private readonly logger = new Logger(FilesService.name);
-  private static readonly STORAGE_WARNING_PERCENT = 90;
 
   constructor(
     @InjectModel(FileRecord.name)
@@ -51,15 +50,20 @@ export class FilesService {
   private toFileDto(raw: any): any {
     const id = raw._id?.toString() ?? raw.id ?? '';
     const name = raw.fileName ?? raw.name ?? '';
-    const ext = (raw.originalName ?? raw.fileName ?? '').split('.').pop()?.toLowerCase() ?? '';
-    const owner = raw.uploadedBy && typeof raw.uploadedBy === 'object'
-      ? {
-          id: raw.uploadedBy._id?.toString() ?? raw.uploadedBy.id,
-          name: raw.uploadedBy.name,
-          email: raw.uploadedBy.email,
-          role: raw.uploadedBy.role,
-        }
-      : raw.owner;
+    const ext =
+      (raw.originalName ?? raw.fileName ?? '')
+        .split('.')
+        .pop()
+        ?.toLowerCase() ?? '';
+    const owner =
+      raw.uploadedBy && typeof raw.uploadedBy === 'object'
+        ? {
+            id: raw.uploadedBy._id?.toString() ?? raw.uploadedBy.id,
+            name: raw.uploadedBy.name,
+            email: raw.uploadedBy.email,
+            role: raw.uploadedBy.role,
+          }
+        : raw.owner;
     return {
       ...raw,
       id,
@@ -78,41 +82,85 @@ export class FilesService {
         return {
           $or: [
             { mimeType: { $regex: '^image/', $options: 'i' } },
-            { originalName: { $regex: '\\.(jpg|jpeg|png|gif|webp|svg|bmp|heic)$', $options: 'i' } },
+            {
+              originalName: {
+                $regex: '\\.(jpg|jpeg|png|gif|webp|svg|bmp|heic)$',
+                $options: 'i',
+              },
+            },
           ],
         };
       case 'video':
         return {
           $or: [
             { mimeType: { $regex: '^video/', $options: 'i' } },
-            { originalName: { $regex: '\\.(mp4|mov|avi|mkv|webm|m4v)$', $options: 'i' } },
+            {
+              originalName: {
+                $regex: '\\.(mp4|mov|avi|mkv|webm|m4v)$',
+                $options: 'i',
+              },
+            },
           ],
         };
       case 'spreadsheet':
         return {
           $or: [
             { mimeType: { $regex: 'spreadsheet|excel|csv', $options: 'i' } },
-            { originalName: { $regex: '\\.(xls|xlsx|csv|ods)$', $options: 'i' } },
+            {
+              originalName: { $regex: '\\.(xls|xlsx|csv|ods)$', $options: 'i' },
+            },
           ],
         };
       case 'document':
         return {
           $or: [
-            { mimeType: { $regex: 'pdf|word|document|text/|presentation|powerpoint', $options: 'i' } },
-            { originalName: { $regex: '\\.(pdf|doc|docx|txt|rtf|ppt|pptx|pages|odt)$', $options: 'i' } },
+            {
+              mimeType: {
+                $regex: 'pdf|word|document|text/|presentation|powerpoint',
+                $options: 'i',
+              },
+            },
+            {
+              originalName: {
+                $regex: '\\.(pdf|doc|docx|txt|rtf|ppt|pptx|pages|odt)$',
+                $options: 'i',
+              },
+            },
           ],
         };
       case 'other':
         return {
           $nor: [
             { mimeType: { $regex: '^image/', $options: 'i' } },
-            { originalName: { $regex: '\\.(jpg|jpeg|png|gif|webp|svg|bmp|heic)$', $options: 'i' } },
+            {
+              originalName: {
+                $regex: '\\.(jpg|jpeg|png|gif|webp|svg|bmp|heic)$',
+                $options: 'i',
+              },
+            },
             { mimeType: { $regex: '^video/', $options: 'i' } },
-            { originalName: { $regex: '\\.(mp4|mov|avi|mkv|webm|m4v)$', $options: 'i' } },
+            {
+              originalName: {
+                $regex: '\\.(mp4|mov|avi|mkv|webm|m4v)$',
+                $options: 'i',
+              },
+            },
             { mimeType: { $regex: 'spreadsheet|excel|csv', $options: 'i' } },
-            { originalName: { $regex: '\\.(xls|xlsx|csv|ods)$', $options: 'i' } },
-            { mimeType: { $regex: 'pdf|word|document|text/|presentation|powerpoint', $options: 'i' } },
-            { originalName: { $regex: '\\.(pdf|doc|docx|txt|rtf|ppt|pptx|pages|odt)$', $options: 'i' } },
+            {
+              originalName: { $regex: '\\.(xls|xlsx|csv|ods)$', $options: 'i' },
+            },
+            {
+              mimeType: {
+                $regex: 'pdf|word|document|text/|presentation|powerpoint',
+                $options: 'i',
+              },
+            },
+            {
+              originalName: {
+                $regex: '\\.(pdf|doc|docx|txt|rtf|ppt|pptx|pages|odt)$',
+                $options: 'i',
+              },
+            },
           ],
         };
       default:
@@ -123,12 +171,18 @@ export class FilesService {
   /* =========================
      SAVE FILE METADATA
   ========================= */
-  async saveMetadata(dto: SaveFileMetadataDto, userId: string, organizationId?: string | null) {
+  async saveMetadata(
+    dto: SaveFileMetadataDto,
+    userId: string,
+    organizationId?: string | null,
+  ) {
     const { fileId, fileName, ...rest } = dto;
     const ownerId = new Types.ObjectId(userId);
     const expectedKeyPrefix = `uploads/${userId}/`;
     if (!dto.key.startsWith(expectedKeyPrefix)) {
-      throw new ForbiddenException('The uploaded object does not belong to the current user');
+      throw new ForbiddenException(
+        'The uploaded object does not belong to the current user',
+      );
     }
 
     // Finalization is deliberately idempotent. A browser may retry this request
@@ -158,15 +212,20 @@ export class FilesService {
       ...(fileId ? { _id: new Types.ObjectId(fileId) } : {}),
       fileName: fileName ?? dto.originalName,
       uploadedBy: ownerId,
-      organizationId: organizationId ? new Types.ObjectId(organizationId) : null,
+      organizationId: organizationId
+        ? new Types.ObjectId(organizationId)
+        : null,
       folderId,
-      uploadSessionId: dto.uploadSessionId ? new Types.ObjectId(dto.uploadSessionId) : null,
+      uploadSessionId: dto.uploadSessionId
+        ? new Types.ObjectId(dto.uploadSessionId)
+        : null,
       tags: dto.tags?.map((t) => t.toLowerCase().trim()) ?? [],
       status: 'active',
     });
 
-    this.notifyFileUploaded(file, userId, organizationId).catch(() => undefined);
-    this.checkStorageLimit(userId, organizationId).catch(() => undefined);
+    this.notifyFileUploaded(file, userId, organizationId).catch(
+      () => undefined,
+    );
 
     return file.populate('uploadedBy', 'name email');
   }
@@ -248,36 +307,6 @@ export class FilesService {
     });
   }
 
-  private async checkStorageLimit(userId: string, organizationId?: string | null) {
-    const [user, usage] = await Promise.all([
-      this.userModel.findById(userId).select('storageQuota').lean<any>(),
-      this.fileModel.aggregate<{ total: number }>([
-        {
-          $match: {
-            uploadedBy: new Types.ObjectId(userId),
-            isDeleted: false,
-          },
-        },
-        { $group: { _id: null, total: { $sum: '$size' } } },
-      ]),
-    ]);
-
-    const quotaBytes = user?.storageQuota ?? 0;
-    if (quotaBytes <= 0) return;
-
-    const usedBytes = usage[0]?.total ?? 0;
-    const usagePercent = +((usedBytes / quotaBytes) * 100).toFixed(2);
-    if (usagePercent < FilesService.STORAGE_WARNING_PERCENT) return;
-
-    await this.notificationsService.createStorageLimitWarning({
-      userId,
-      organizationId: organizationId ?? null,
-      usedBytes,
-      quotaBytes,
-      usagePercent,
-    });
-  }
-
   /* =========================
      LIST FILES
   ========================= */
@@ -310,7 +339,9 @@ export class FilesService {
 
     if (query.mimeType) {
       const escaped = query.mimeType.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      andConditions.push({ mimeType: { $regex: `^${escaped}`, $options: 'i' } });
+      andConditions.push({
+        mimeType: { $regex: `^${escaped}`, $options: 'i' },
+      });
     }
 
     const categoryFilter = this.getCategoryFilter(query.category);
@@ -330,18 +361,30 @@ export class FilesService {
     }
 
     if (query.ownerRole && isSuperadmin) {
-      const ownerIds = await this.userModel.distinct('_id', { role: query.ownerRole });
+      const ownerIds = await this.userModel.distinct('_id', {
+        role: query.ownerRole,
+      });
       andConditions.push({ uploadedBy: { $in: ownerIds } });
     }
 
-    const filter = andConditions.length > 1 ? { $and: andConditions } : andConditions[0];
+    const filter =
+      andConditions.length > 1 ? { $and: andConditions } : andConditions[0];
 
     const page = Math.max(1, query.page ?? 1);
     const limit = Math.min(100, query.limit ?? 20);
     const skip = (page - 1) * limit;
 
-    const allowedSortFields = ['createdAt', 'updatedAt', 'fileName', 'size', 'downloadCount', 'lastAccessedAt'];
-    const sortBy = allowedSortFields.includes(query.sortBy) ? query.sortBy : 'createdAt';
+    const allowedSortFields = [
+      'createdAt',
+      'updatedAt',
+      'fileName',
+      'size',
+      'downloadCount',
+      'lastAccessedAt',
+    ];
+    const sortBy = allowedSortFields.includes(query.sortBy)
+      ? query.sortBy
+      : 'createdAt';
     const sortOrder = query.sortOrder === 'asc' ? 1 : -1;
 
     const [files, total] = await Promise.all([
@@ -394,7 +437,9 @@ export class FilesService {
   async findOneWithViewUrl(fileId: string, currentUser: any) {
     const file = await this.findOneAndVerifyAccess(fileId, currentUser);
 
-    await this.fileModel.findByIdAndUpdate(fileId, { lastAccessedAt: new Date() });
+    await this.fileModel.findByIdAndUpdate(fileId, {
+      lastAccessedAt: new Date(),
+    });
 
     const viewUrl = await this.r2Service.generatePresignedViewUrl(file.key);
     return { file, viewUrl };
@@ -408,8 +453,10 @@ export class FilesService {
     this.assertOwnerOrAdmin(file, currentUser);
 
     const updates: Record<string, any> = {};
-    if (dto.description !== undefined) updates.description = dto.description ?? null;
-    if (dto.tags !== undefined) updates.tags = dto.tags.map((t) => t.toLowerCase().trim());
+    if (dto.description !== undefined)
+      updates.description = dto.description ?? null;
+    if (dto.tags !== undefined)
+      updates.tags = dto.tags.map((t) => t.toLowerCase().trim());
 
     if (!Object.keys(updates).length) {
       return this.toFileDto((file as any).toObject?.() ?? file);
@@ -458,7 +505,8 @@ export class FilesService {
      PERMANENT DELETE
   ========================= */
   async permanentDelete(fileId: string, currentUser: any) {
-    if (!Types.ObjectId.isValid(fileId)) throw new BadRequestException('Invalid file ID');
+    if (!Types.ObjectId.isValid(fileId))
+      throw new BadRequestException('Invalid file ID');
 
     const file = await this.fileModel.findById(fileId);
     if (!file) throw new NotFoundException('File not found');
@@ -494,7 +542,8 @@ export class FilesService {
      RESTORE FROM TRASH
   ========================= */
   async restore(fileId: string, currentUser: any) {
-    if (!Types.ObjectId.isValid(fileId)) throw new BadRequestException('Invalid file ID');
+    if (!Types.ObjectId.isValid(fileId))
+      throw new BadRequestException('Invalid file ID');
 
     const file = await this.fileModel.findOne({ _id: fileId, isDeleted: true });
     if (!file) throw new NotFoundException('File not found in trash');
@@ -565,23 +614,25 @@ export class FilesService {
   async getSharedWithMe(currentUser: any): Promise<any[]> {
     const now = new Date();
 
-    const userShares = await this.shareModel.find({
-      resourceType: ResourceType.FILE,
-      isActive: true,
-      $and: [
-        {
-          $or: [
-            { sharedWithUserIds: currentUser._id },
-            { sharedWithUserIds: this.oid(this.uid(currentUser)) },
-            { sharedWithEmails: currentUser.email?.toLowerCase() },
-            { type: ShareType.LINK },
-          ],
-        },
-        {
-          $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }],
-        },
-      ],
-    }).select('fileId permission type expiresAt viewCount downloadCount name');
+    const userShares = await this.shareModel
+      .find({
+        resourceType: ResourceType.FILE,
+        isActive: true,
+        $and: [
+          {
+            $or: [
+              { sharedWithUserIds: currentUser._id },
+              { sharedWithUserIds: this.oid(this.uid(currentUser)) },
+              { sharedWithEmails: currentUser.email?.toLowerCase() },
+              { type: ShareType.LINK },
+            ],
+          },
+          {
+            $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }],
+          },
+        ],
+      })
+      .select('fileId permission type expiresAt viewCount downloadCount name');
 
     const fileIds = userShares.map((s) => s.fileId).filter(Boolean);
     if (!fileIds.length) return [];
@@ -594,7 +645,10 @@ export class FilesService {
     const shareMap = new Map(userShares.map((s) => [s.fileId?.toString(), s]));
 
     return files.map((f) =>
-      this.toFileDto({ ...f, shareInfo: shareMap.get((f._id as any).toString()) ?? null }),
+      this.toFileDto({
+        ...f,
+        shareInfo: shareMap.get((f._id as any).toString()) ?? null,
+      }),
     );
   }
 
@@ -611,7 +665,12 @@ export class FilesService {
         ...this.ownerFilter(currentUser),
         isDeleted: false,
       },
-      { isDeleted: true, status: 'trashed', deletedAt: now, deletedBy: currentUser._id },
+      {
+        isDeleted: true,
+        status: 'trashed',
+        deletedAt: now,
+        deletedBy: currentUser._id,
+      },
     );
 
     return { message: `${result.modifiedCount} file(s) moved to trash` };
@@ -674,11 +733,39 @@ export class FilesService {
                 _id: {
                   $switch: {
                     branches: [
-                      { case: { $eq: [{ $substr: ['$mimeType', 0, 6] }, 'image/'] }, then: 'image' },
-                      { case: { $eq: [{ $substr: ['$mimeType', 0, 6] }, 'video/'] }, then: 'video' },
-                      { case: { $eq: [{ $substr: ['$mimeType', 0, 6] }, 'audio/'] }, then: 'audio' },
-                      { case: { $eq: [{ $substr: ['$mimeType', 0, 5] }, 'text/'] }, then: 'text' },
-                      { case: { $eq: [{ $substr: ['$mimeType', 0, 12] }, 'application/'] }, then: 'application' },
+                      {
+                        case: {
+                          $eq: [{ $substr: ['$mimeType', 0, 6] }, 'image/'],
+                        },
+                        then: 'image',
+                      },
+                      {
+                        case: {
+                          $eq: [{ $substr: ['$mimeType', 0, 6] }, 'video/'],
+                        },
+                        then: 'video',
+                      },
+                      {
+                        case: {
+                          $eq: [{ $substr: ['$mimeType', 0, 6] }, 'audio/'],
+                        },
+                        then: 'audio',
+                      },
+                      {
+                        case: {
+                          $eq: [{ $substr: ['$mimeType', 0, 5] }, 'text/'],
+                        },
+                        then: 'text',
+                      },
+                      {
+                        case: {
+                          $eq: [
+                            { $substr: ['$mimeType', 0, 12] },
+                            'application/',
+                          ],
+                        },
+                        then: 'application',
+                      },
                     ],
                     default: 'other',
                   },
@@ -693,14 +780,26 @@ export class FilesService {
             { $match: { isDeleted: false } },
             { $sort: { createdAt: -1 } },
             { $limit: 5 },
-            { $project: { fileName: 1, size: 1, mimeType: 1, createdAt: 1, uploadedBy: 1 } },
+            {
+              $project: {
+                fileName: 1,
+                size: 1,
+                mimeType: 1,
+                createdAt: 1,
+                uploadedBy: 1,
+              },
+            },
           ],
         },
       },
     ]);
 
     const t = result.totals[0] ?? {
-      total: 0, totalSize: 0, active: 0, trashed: 0, totalDownloads: 0,
+      total: 0,
+      totalSize: 0,
+      active: 0,
+      trashed: 0,
+      totalDownloads: 0,
     };
 
     return {
@@ -752,7 +851,10 @@ export class FilesService {
   /* =========================
      PRIVATE HELPERS
   ========================= */
-  private async findOneAndVerifyAccess(fileId: string, currentUser: any): Promise<FileDocument> {
+  private async findOneAndVerifyAccess(
+    fileId: string,
+    currentUser: any,
+  ): Promise<FileDocument> {
     if (!Types.ObjectId.isValid(fileId)) {
       throw new BadRequestException('Invalid file ID');
     }
@@ -800,7 +902,9 @@ export class FilesService {
     const isOwner = file.uploadedBy.toString() === currentUser._id.toString();
     const isAdmin = currentUser.role === Role.SUPERADMIN;
     if (!isOwner && !isAdmin) {
-      throw new ForbiddenException('Only the file owner or a superadmin can perform this action');
+      throw new ForbiddenException(
+        'Only the file owner or a superadmin can perform this action',
+      );
     }
   }
 
@@ -817,7 +921,8 @@ export class FilesService {
   }
 
   private oid(id: string): Types.ObjectId {
-    if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid ID');
+    if (!Types.ObjectId.isValid(id))
+      throw new BadRequestException('Invalid ID');
     return new Types.ObjectId(id);
   }
 
@@ -846,7 +951,9 @@ export class FilesService {
       .lean<{ _id: Types.ObjectId }>();
 
     if (!folder) {
-      throw new ForbiddenException('You can only upload files to your own folders');
+      throw new ForbiddenException(
+        'You can only upload files to your own folders',
+      );
     }
 
     return folder._id as Types.ObjectId;
@@ -875,7 +982,9 @@ export class FilesService {
       .lean<Array<{ _id: Types.ObjectId }>>();
 
     if (folders.length !== folderIds.length) {
-      throw new ForbiddenException('You can only upload files to your own folders');
+      throw new ForbiddenException(
+        'You can only upload files to your own folders',
+      );
     }
 
     for (const folder of folders) {

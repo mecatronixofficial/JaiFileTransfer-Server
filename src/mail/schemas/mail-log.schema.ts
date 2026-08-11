@@ -8,6 +8,8 @@ export enum MailLogType {
   SHARE_INVITATION = 'share_invitation',
   SHARE_REVOKED = 'share_revoked',
   TRANSFER_LINK = 'transfer_link',
+  TRANSFER_DOWNLOADED = 'transfer_downloaded',
+  TRANSFER_EXPIRY_REMINDER = 'transfer_expiry_reminder',
   PASSWORD_RESET_CONFIRMED = 'password_reset_confirmed',
   EMAIL_CHANGE_NOTICE = 'email_change_notice',
   STORAGE_LIMIT_WARNING = 'storage_limit_warning',
@@ -40,7 +42,7 @@ export class MailLog {
   @Prop({ required: true })
   subject: string;
 
-  @Prop({ default: 'resend' })
+  @Prop({ default: 'smtp' })
   provider: string;
 
   @Prop({ type: String, default: null })
@@ -51,7 +53,13 @@ export class MailLog {
     enum: ['pending', 'sent', 'delivered', 'failed', 'bounced', 'complained'],
     default: 'pending',
   })
-  status: 'pending' | 'sent' | 'delivered' | 'failed' | 'bounced' | 'complained';
+  status:
+    | 'pending'
+    | 'sent'
+    | 'delivered'
+    | 'failed'
+    | 'bounced'
+    | 'complained';
 
   @Prop({ type: String, default: null })
   error: string | null;
@@ -83,4 +91,7 @@ MailLogSchema.index({ status: 1, createdAt: -1 });
 MailLogSchema.index({ type: 1, createdAt: -1 });
 
 /** TTL: auto-delete mail log entries after 180 days */
-MailLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 180 * 24 * 60 * 60 });
+MailLogSchema.index(
+  { createdAt: 1 },
+  { expireAfterSeconds: 180 * 24 * 60 * 60 },
+);

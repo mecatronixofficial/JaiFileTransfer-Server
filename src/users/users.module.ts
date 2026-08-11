@@ -7,6 +7,7 @@ import { UsersController } from './users.controller';
 import { User, UserSchema } from './schemas/user.schema';
 import { FileRecord, FileSchema } from '../files/schemas/file.schema';
 import { FilesModule } from '../files/files.module';
+import { R2Module } from '../r2/r2.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { FilesModule } from '../files/files.module';
       { name: FileRecord.name, schema: FileSchema },
     ]),
     forwardRef(() => FilesModule),
+    R2Module,
   ],
   controllers: [UsersController],
   providers: [UsersService],

@@ -7,11 +7,11 @@ import {
   OnModuleDestroy,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Resend } from 'resend';
 import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
 
 import { OtpPurpose } from '../common/enums';
+import { SmtpService } from '../mail/smtp.service';
 
 /** Seconds before the user may request another OTP for the same purpose */
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -36,20 +36,14 @@ interface OtpEntry {
 @Injectable()
 export class OtpService implements OnModuleDestroy {
   private readonly logger = new Logger(OtpService.name);
-  private readonly resend: Resend;
-  private readonly from: string;
-
   /** Key: `${userId}:${purpose}` — one active entry per user+purpose */
   private readonly store = new Map<string, OtpEntry>();
   private readonly cleanupTimer: ReturnType<typeof setInterval>;
 
-  constructor(private readonly configService: ConfigService) {
-    const apiKey = this.configService.get<string>('email.apiKey');
-    if (!apiKey) throw new Error('RESEND_API_KEY missing in environment variables');
-
-    this.resend = new Resend(apiKey);
-    this.from = this.configService.get<string>('email.from') ?? 'onboarding@resend.dev';
-
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly smtpService: SmtpService,
+  ) {
     this.cleanupTimer = setInterval(() => this.cleanup(), CLEANUP_INTERVAL_MS);
   }
 
@@ -212,8 +206,7 @@ export class OtpService implements OnModuleDestroy {
     const html = this.buildHtml(code, config, expiryMinutes);
 
     try {
-      await this.resend.emails.send({
-        from: this.from,
+      await this.smtpService.sendMail({
         to,
         subject: `[Jai Export Enterprises] ${config.subject}`,
         html,

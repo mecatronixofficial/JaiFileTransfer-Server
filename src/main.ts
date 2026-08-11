@@ -13,7 +13,6 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: ['log', 'warn', 'error'], // conservative during startup; updated below
     bufferLogs: true,
-    rawBody: true, // required for Resend webhook signature verification
   });
 
   const configService = app.get(ConfigService);

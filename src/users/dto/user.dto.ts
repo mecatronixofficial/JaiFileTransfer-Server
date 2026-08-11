@@ -14,6 +14,9 @@ import {
   Max,
   IsPositive,
   IsUrl,
+  IsArray,
+  ArrayNotEmpty,
+  IsMongoId,
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 import { Role } from '../../common/enums';
@@ -110,6 +113,7 @@ export class UpdateUserDto {
 ========================= */
 export class UpdateProfileDto {
   @IsString()
+  @IsNotEmpty()
   @IsOptional()
   @MaxLength(100)
   @normalizeString()
@@ -119,16 +123,23 @@ export class UpdateProfileDto {
   @IsOptional()
   @MaxLength(100)
   @normalizeString()
-  department?: string;
+  department?: string | null;
 
   @IsString()
   @IsOptional()
   @Matches(/^[0-9]{10}$/, { message: 'Phone must be a valid 10-digit number' })
-  phone?: string;
+  phone?: string | null;
 
   @IsUrl()
   @IsOptional()
-  avatar?: string;
+  avatar?: string | null;
+}
+
+export class ReorderUsersDto {
+  @IsArray()
+  @ArrayNotEmpty()
+  @IsMongoId({ each: true })
+  userIds: string[];
 }
 
 export class UpdateNotificationPreferencesDto {

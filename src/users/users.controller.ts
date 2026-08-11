@@ -13,9 +13,14 @@ import {
   HttpStatus,
   BadRequestException,
   Logger,
+  UseInterceptors,
+  UploadedFile,
+  Res,
 } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { Throttle } from '@nestjs/throttler';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
 
 import { UsersService, AuthUser } from './users.service';
 import {
@@ -27,6 +32,7 @@ import {
   ChangePasswordDto,
   UpdateQuotaDto,
   ListUsersDto,
+  ReorderUsersDto,
 } from './dto/user.dto';
 
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -58,6 +64,39 @@ export class UsersController {
   async updateMe(@CurrentUser() user: any, @Body() dto: UpdateProfileDto) {
     const data = await this.usersService.updateProfile(user._id.toString(), dto);
     return { success: true, message: 'Profile updated successfully', data };
+  }
+
+  /** Upload a profile photo (5 MB) or banner (8 MB). */
+  @Patch('me/profile-media/:kind')
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: 8 * 1024 * 1024 } }),
+  )
+  async uploadProfileMedia(
+    @CurrentUser() user: any,
+    @Param('kind') kind: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    const data = await this.usersService.uploadProfileMedia(
+      user._id.toString(),
+      kind,
+      file,
+    );
+    return { success: true, message: 'Profile image updated successfully', data };
+  }
+
+  /** Stream the current user's private profile image from R2. */
+  @Get('me/profile-media/:kind')
+  async getProfileMedia(
+    @CurrentUser() user: any,
+    @Param('kind') kind: string,
+    @Res() response: Response,
+  ): Promise<void> {
+    const media = await this.usersService.getProfileMedia(user._id.toString(), kind);
+    response.setHeader('Content-Type', media.contentType);
+    response.setHeader('Content-Length', String(media.size));
+    response.setHeader('Cache-Control', 'private, max-age=300');
+    response.setHeader('Content-Disposition', 'inline');
+    media.stream.pipe(response);
   }
 
   /** GET /users/me/notification-preferences */
@@ -154,6 +193,20 @@ export class UsersController {
       query,
     );
     return { success: true, message: 'Users retrieved successfully', data: result };
+  }
+
+  /** PATCH /users/order — persist drag-and-drop ordering for visible users. */
+  @Patch('order')
+  @Roles(Role.SUPERADMIN, Role.ADMIN)
+  async reorder(
+    @CurrentUser() user: any,
+    @Body() dto: ReorderUsersDto,
+  ) {
+    const data = await this.usersService.reorderUsers(
+      { _id: user._id.toString(), role: user.role },
+      dto.userIds,
+    );
+    return { success: true, message: 'User order updated successfully', data };
   }
 
   /** GET /users/storage/usage — storage usage for all visible users (admin+) */

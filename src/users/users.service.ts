@@ -9,6 +9,8 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as bcrypt from 'bcrypt';
+import { randomUUID } from 'crypto';
+import type { Readable } from 'stream';
 
 import {
   DEFAULT_NOTIFICATION_PREFERENCES,
@@ -31,6 +33,7 @@ import {
 import { Role } from '../common/enums';
 import { MailService } from '../mail/mail.service';
 import { FilesService } from '../files/files.service';
+import { R2Service } from '../r2/r2.service';
 import {
   RawStorageCategoryStat,
   buildStorageCategoryStats,
@@ -38,6 +41,13 @@ import {
 } from '../files/storage-category.util';
 
 const SALT_ROUNDS = 12;
+const PROFILE_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const PROFILE_IMAGE_LIMITS = {
+  avatar: 5 * 1024 * 1024,
+  banner: 8 * 1024 * 1024,
+} as const;
+
+export type ProfileMediaKind = keyof typeof PROFILE_IMAGE_LIMITS;
 
 export interface AuthUser {
   _id: string;
@@ -57,6 +67,7 @@ export class UsersService {
     private readonly fileModel: Model<FileDocument>,
     private readonly mailService: MailService,
     private readonly filesService: FilesService,
+    private readonly r2Service: R2Service,
   ) {}
 
   /* ═══════════════════════════════════════
@@ -141,7 +152,7 @@ export class UsersService {
       this.userModel
         .find(query)
         .select('-password -refreshToken')
-        .sort({ createdAt: -1 })
+        .sort({ sortOrder: 1, createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean()
@@ -191,6 +202,37 @@ export class UsersService {
       }),
       pagination: { page, limit, total, pages: Math.ceil(total / limit) },
     };
+  }
+
+  async reorderUsers(currentUser: AuthUser, userIds: string[]) {
+    const uniqueIds = [...new Set(userIds)];
+    if (uniqueIds.length !== userIds.length) {
+      throw new BadRequestException('User order contains duplicate IDs');
+    }
+    uniqueIds.forEach((id) => this.validateId(id));
+
+    const allowedQuery: Record<string, unknown> = {
+      _id: { $in: uniqueIds.map((id) => new Types.ObjectId(id)) },
+    };
+    if (currentUser.role === Role.ADMIN) {
+      allowedQuery.createdBy = new Types.ObjectId(currentUser._id);
+    }
+
+    const allowedCount = await this.userModel.countDocuments(allowedQuery).exec();
+    if (allowedCount !== uniqueIds.length) {
+      throw new ForbiddenException('You can only reorder users you are allowed to manage');
+    }
+
+    await this.userModel.bulkWrite(
+      uniqueIds.map((id, sortOrder) => ({
+        updateOne: {
+          filter: { _id: new Types.ObjectId(id) },
+          update: { $set: { sortOrder } },
+        },
+      })),
+    );
+
+    return { userIds: uniqueIds };
   }
 
   /* ═══════════════════════════════════════
@@ -345,10 +387,17 @@ export class UsersService {
     this.validateId(userId);
 
     const allowedUpdates: Record<string, unknown> = {};
-    if (dto.name !== undefined) allowedUpdates.name = dto.name.trim();
-    if (dto.department !== undefined) allowedUpdates.department = dto.department.trim();
-    if (dto.phone !== undefined) allowedUpdates.phone = dto.phone;
-    if (dto.avatar !== undefined) allowedUpdates.avatar = dto.avatar;
+    if (dto.name !== undefined) {
+      const name = typeof dto.name === 'string' ? dto.name.trim() : '';
+      if (!name) throw new BadRequestException('Name is required');
+      allowedUpdates.name = name;
+    }
+    if (dto.department !== undefined) {
+      allowedUpdates.department =
+        typeof dto.department === 'string' ? dto.department.trim() || null : null;
+    }
+    if (dto.phone !== undefined) allowedUpdates.phone = dto.phone || null;
+    if (dto.avatar !== undefined) allowedUpdates.avatar = dto.avatar || null;
 
     if (Object.keys(allowedUpdates).length === 0) {
       throw new BadRequestException('No valid fields to update');
@@ -362,6 +411,126 @@ export class UsersService {
 
     if (!user) throw new NotFoundException('User not found');
     return user;
+  }
+
+  async uploadProfileMedia(
+    userId: string,
+    kind: string,
+    file: Express.Multer.File,
+  ) {
+    this.validateId(userId);
+    this.validateProfileImage(kind, file);
+
+    const existing = await this.userModel
+      .findById(userId)
+      .select('+avatarKey +profileBannerKey')
+      .lean<{
+        avatarKey?: string | null;
+        profileBannerKey?: string | null;
+      }>()
+      .exec();
+    if (!existing) throw new NotFoundException('User not found');
+
+    const extension = file.mimetype === 'image/jpeg'
+      ? 'jpg'
+      : file.mimetype === 'image/png'
+        ? 'png'
+        : 'webp';
+    const key = `profile-media/${userId}/${kind}-${randomUUID()}.${extension}`;
+    const keyField = kind === 'avatar' ? 'avatarKey' : 'profileBannerKey';
+    const urlField = kind === 'avatar' ? 'avatar' : 'profileBanner';
+    const oldKey = kind === 'avatar' ? existing.avatarKey : existing.profileBannerKey;
+    const mediaUrl = `/api/v1/users/me/profile-media/${kind}?v=${Date.now()}`;
+
+    await this.r2Service.uploadObject(key, file.buffer, file.mimetype);
+
+    let user;
+    try {
+      user = await this.userModel
+        .findByIdAndUpdate(
+          userId,
+          { $set: { [keyField]: key, [urlField]: mediaUrl } },
+          { new: true, runValidators: true },
+        )
+        .select('-password -refreshToken -avatarKey -profileBannerKey')
+        .lean()
+        .exec();
+    } catch (error) {
+      await this.r2Service.deleteObject(key).catch(() => undefined);
+      throw error;
+    }
+
+    if (!user) {
+      await this.r2Service.deleteObject(key).catch(() => undefined);
+      throw new NotFoundException('User not found');
+    }
+
+    if (oldKey && oldKey !== key) {
+      await this.r2Service.deleteObject(oldKey).catch((error: Error) => {
+        this.logger.warn(`Could not remove previous ${kind}: ${error.message}`);
+      });
+    }
+
+    return user;
+  }
+
+  async getProfileMedia(
+    userId: string,
+    kind: string,
+  ): Promise<{ stream: Readable; contentType: string; size: number }> {
+    this.validateId(userId);
+    this.validateProfileMediaKind(kind);
+
+    const user = await this.userModel
+      .findById(userId)
+      .select('+avatarKey +profileBannerKey')
+      .lean<{
+        avatarKey?: string | null;
+        profileBannerKey?: string | null;
+      }>()
+      .exec();
+    if (!user) throw new NotFoundException('User not found');
+
+    const key = kind === 'avatar' ? user.avatarKey : user.profileBannerKey;
+    if (!key) throw new NotFoundException(`${kind === 'avatar' ? 'Profile photo' : 'Banner'} not found`);
+
+    const metadata = await this.r2Service.getObjectMetadata(key);
+    if (!metadata) throw new NotFoundException('Profile image not found');
+
+    return {
+      stream: await this.r2Service.getObjectStream(key),
+      contentType: metadata.contentType,
+      size: metadata.size,
+    };
+  }
+
+  private validateProfileMediaKind(kind: string): asserts kind is ProfileMediaKind {
+    if (kind !== 'avatar' && kind !== 'banner') {
+      throw new BadRequestException('Profile image type must be avatar or banner');
+    }
+  }
+
+  private validateProfileImage(kind: string, file?: Express.Multer.File): asserts kind is ProfileMediaKind {
+    this.validateProfileMediaKind(kind);
+    if (!file?.buffer?.length) throw new BadRequestException('No image provided');
+    if (!PROFILE_IMAGE_TYPES.has(file.mimetype)) {
+      throw new BadRequestException('Use a JPG, PNG, or WebP image');
+    }
+    if (file.size > PROFILE_IMAGE_LIMITS[kind]) {
+      const maxMb = PROFILE_IMAGE_LIMITS[kind] / (1024 * 1024);
+      throw new BadRequestException(`${kind === 'avatar' ? 'Profile photo' : 'Banner'} must be ${maxMb} MB or smaller`);
+    }
+
+    const buffer = file.buffer;
+    const isJpeg = buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+    const isPng = buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    const isWebp = buffer.length >= 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP';
+    const signatureMatches =
+      (file.mimetype === 'image/jpeg' && isJpeg) ||
+      (file.mimetype === 'image/png' && isPng) ||
+      (file.mimetype === 'image/webp' && isWebp);
+
+    if (!signatureMatches) throw new BadRequestException('The uploaded file is not a valid image');
   }
 
   async getNotificationPreferences(

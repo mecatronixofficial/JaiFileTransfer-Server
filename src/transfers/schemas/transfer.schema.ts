@@ -146,6 +146,9 @@ export class Transfer {
   @Prop({ required: true })
   expiresAt: Date;
 
+  @Prop({ type: [Number], default: [] })
+  expiryReminderDaysSent: number[];
+
   @Prop({ default: false })
   hasPassword: boolean;
 

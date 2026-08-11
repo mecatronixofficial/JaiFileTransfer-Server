@@ -168,6 +168,7 @@ export class TransfersController {
       this.currentUserId(user),
       user.name ?? user.email,
       user.organizationId?.toString?.() ?? null,
+      user.email,
     );
 
     return {

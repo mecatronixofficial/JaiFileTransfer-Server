@@ -87,17 +87,36 @@ export const r2Config = registerAs('r2', () => {
 });
 
 /* =========================
-   EMAIL (RESEND)
+   EMAIL (SMTP)
 ========================= */
 export const emailConfig = registerAs('email', () => {
-  const apiKey = process.env.RESEND_API_KEY?.trim();
-  if (!apiKey) throw new Error('RESEND_API_KEY is not defined');
+  const host = process.env.SMTP_HOST?.trim();
+  const user = process.env.SMTP_USER?.trim();
+  const password = process.env.SMTP_PASSWORD;
+
+  if (!host || !user || !password) {
+    throw new Error('SMTP_HOST, SMTP_USER, and SMTP_PASSWORD are required');
+  }
+
+  const port = Number(process.env.SMTP_PORT ?? 587);
+  if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
+    throw new Error('SMTP_PORT must be a valid TCP port');
+  }
+
+  const secure = (process.env.SMTP_SECURE ?? String(port === 465)).toLowerCase() === 'true';
 
   return {
-    provider: process.env.EMAIL_PROVIDER ?? 'resend',
-    apiKey,
-    from: process.env.RESEND_FROM ?? 'onboarding@resend.dev',
-    webhookSecret: process.env.RESEND_WEBHOOK_SECRET ?? '',
+    provider: 'smtp',
+    host,
+    port,
+    secure,
+    user,
+    password,
+    from: process.env.SMTP_FROM?.trim() || user,
+    fromName:
+      process.env.SMTP_FROM_NAME?.trim() ||
+      process.env.APP_NAME?.trim() ||
+      'Jai Export Enterprises',
   };
 });
 

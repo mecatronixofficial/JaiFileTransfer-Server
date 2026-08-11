@@ -315,8 +315,12 @@ R2_ACCESS_KEY_ID=your-key-id
 R2_SECRET_ACCESS_KEY=your-secret
 R2_BUCKET_NAME=jai-india-filetransfer
 PRESIGNED_UPLOAD_EXPIRY=21600
-SMTP_USER=your-email@gmail.com
-SMTP_PASS=your-app-password
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your-email@example.com
+SMTP_PASSWORD=your-smtp-password
+SMTP_FROM=your-email@example.com
 ```
 
 For browser uploads directly to Cloudflare R2, configure bucket CORS for your
