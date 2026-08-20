@@ -82,11 +82,8 @@ export class UsersService {
 
     const email = this.normalizeEmail(dto.email);
 
-    if (dto.role === Role.SUPERADMIN) {
-      throw new ForbiddenException('Cannot create SUPERADMIN');
-    }
-    if (dto.role === Role.ADMIN && creatorRole !== Role.SUPERADMIN) {
-      throw new ForbiddenException('Only SUPERADMIN can create ADMIN');
+    if (dto.role === Role.SUPERADMIN && creatorRole !== Role.SUPERADMIN) {
+      throw new ForbiddenException('Only SUPERADMIN can create SUPERADMIN');
     }
 
     const exists = await this.userModel.exists({ email });
