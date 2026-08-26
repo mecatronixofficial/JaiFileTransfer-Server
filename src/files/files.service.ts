@@ -26,6 +26,11 @@ import { R2Service } from '../r2/r2.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/schemas/notification.schema';
 import { Role, ShareType, ResourceType } from '../common/enums';
+import { ALLOWED_MIME_TYPES } from '../upload/dto/upload.dto';
+import {
+  getUploadBlockReason,
+  normalizeUploadMimeType,
+} from '../upload/file-type.util';
 
 @Injectable()
 export class FilesService {
@@ -207,8 +212,17 @@ export class FilesService {
     }
 
     const folderId = await this.verifyWritableFolder(dto.folderId, userId);
+    const blockedReason = getUploadBlockReason(dto.originalName);
+    if (blockedReason) throw new BadRequestException(blockedReason);
+    const mimeType = normalizeUploadMimeType(dto.originalName, dto.mimeType);
+    if (!ALLOWED_MIME_TYPES.includes(mimeType)) {
+      throw new BadRequestException(
+        `Unsupported file type: ${mimeType}. Use a recognized business file format.`,
+      );
+    }
     const file = await this.fileModel.create({
       ...rest,
+      mimeType,
       ...(fileId ? { _id: new Types.ObjectId(fileId) } : {}),
       fileName: fileName ?? dto.originalName,
       uploadedBy: ownerId,

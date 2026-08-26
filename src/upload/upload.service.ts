@@ -23,6 +23,10 @@ import {
   ALLOWED_MIME_TYPES,
   MAX_FILE_SIZE,
 } from './dto/upload.dto';
+import {
+  getUploadBlockReason,
+  normalizeUploadMimeType,
+} from './file-type.util';
 
 @Injectable()
 export class UploadService {
@@ -33,7 +37,8 @@ export class UploadService {
 
   constructor(
     private readonly r2Service: R2Service,
-    @InjectModel(Folder.name) private readonly folderModel: Model<FolderDocument>,
+    @InjectModel(Folder.name)
+    private readonly folderModel: Model<FolderDocument>,
     @InjectModel(UploadSession.name)
     private readonly uploadSessionModel: Model<UploadSessionDocument>,
   ) {}
@@ -45,15 +50,26 @@ export class UploadService {
     return name.replace(/[^a-zA-Z0-9._-]/g, '_');
   }
 
-  private validateFile(mimeType: string, size: number): void {
+  private validateFile(
+    fileName: string,
+    suppliedMimeType: string,
+    size: number,
+  ): string {
+    const blockedReason = getUploadBlockReason(fileName);
+    if (blockedReason) throw new BadRequestException(blockedReason);
+
+    const mimeType = normalizeUploadMimeType(fileName, suppliedMimeType);
     if (!ALLOWED_MIME_TYPES.includes(mimeType)) {
-      throw new BadRequestException(`Unsupported file type: ${mimeType}`);
+      throw new BadRequestException(
+        `Unsupported file type: ${mimeType}. Use a recognized business file format.`,
+      );
     }
     if (size > MAX_FILE_SIZE) {
       throw new BadRequestException(
-        `File exceeds the maximum allowed size of ${MAX_FILE_SIZE / (1024 ** 3)} GB`,
+        `File exceeds the maximum allowed size of ${MAX_FILE_SIZE / 1024 ** 3} GB`,
       );
     }
+    return mimeType;
   }
 
   private getMultipartPartCount(
@@ -70,7 +86,10 @@ export class UploadService {
       : this.multipartPartSize;
   }
 
-  private async requireWritableFolder(folderId: string | undefined, userId: string) {
+  private async requireWritableFolder(
+    folderId: string | undefined,
+    userId: string,
+  ) {
     if (!folderId) return null;
     if (!Types.ObjectId.isValid(folderId)) {
       throw new BadRequestException('Invalid folder ID');
@@ -80,11 +99,16 @@ export class UploadService {
       createdBy: new Types.ObjectId(userId),
       isDeleted: false,
     });
-    if (!folder) throw new BadRequestException('Folder not found or not writable');
+    if (!folder)
+      throw new BadRequestException('Folder not found or not writable');
     return folder;
   }
 
-  private async requireActiveMultipartSession(uploadId: string, key: string, userId: string) {
+  private async requireActiveMultipartSession(
+    uploadId: string,
+    key: string,
+    userId: string,
+  ) {
     const session = await this.uploadSessionModel.findOne({
       uploadId,
       storageKey: key,
@@ -92,7 +116,8 @@ export class UploadService {
       uploadType: 'multipart',
       status: 'uploading',
     });
-    if (!session) throw new NotFoundException('Active multipart upload session not found');
+    if (!session)
+      throw new NotFoundException('Active multipart upload session not found');
     return session;
   }
 
@@ -109,7 +134,10 @@ export class UploadService {
         while (nextIndex < items.length) {
           const currentIndex = nextIndex;
           nextIndex += 1;
-          results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+          results[currentIndex] = await mapper(
+            items[currentIndex],
+            currentIndex,
+          );
         }
       }),
     );
@@ -120,8 +148,16 @@ export class UploadService {
   /* =========================
      PRESIGNED UPLOAD URL (single file)
   ========================= */
-  async generatePresignedUrl(dto: PresignedUrlDto, userId: string, organizationId?: string | null) {
-    this.validateFile(dto.mimeType, dto.fileSize);
+  async generatePresignedUrl(
+    dto: PresignedUrlDto,
+    userId: string,
+    organizationId?: string | null,
+  ) {
+    const mimeType = this.validateFile(
+      dto.fileName,
+      dto.mimeType,
+      dto.fileSize,
+    );
     await this.requireWritableFolder(dto.folderId, userId);
 
     const safeName = this.sanitizeFileName(dto.fileName);
@@ -129,17 +165,19 @@ export class UploadService {
 
     const { uploadUrl } = await this.r2Service.generatePresignedUploadUrl(
       key,
-      dto.mimeType,
+      mimeType,
       dto.fileSize,
     );
 
     const fileId = new Types.ObjectId().toHexString();
     const session = await this.uploadSessionModel.create({
       userId: new Types.ObjectId(userId),
-      organizationId: organizationId ? new Types.ObjectId(organizationId) : null,
+      organizationId: organizationId
+        ? new Types.ObjectId(organizationId)
+        : null,
       folderId: dto.folderId ? new Types.ObjectId(dto.folderId) : null,
       fileName: dto.fileName,
-      mimeType: dto.mimeType,
+      mimeType,
       size: dto.fileSize,
       storageKey: key,
       uploadId: null,
@@ -149,7 +187,9 @@ export class UploadService {
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     });
 
-    this.logger.log(`Presigned URL generated | user=${userId} | file=${dto.fileName} | size=${dto.fileSize}`);
+    this.logger.log(
+      `Presigned URL generated | user=${userId} | file=${dto.fileName} | size=${dto.fileSize}`,
+    );
 
     return {
       url: uploadUrl,
@@ -169,14 +209,21 @@ export class UploadService {
     userId: string,
     organizationId?: string | null,
   ) {
-    this.validateFile(dto.mimeType, dto.fileSize);
+    const mimeType = this.validateFile(
+      dto.fileName,
+      dto.mimeType,
+      dto.fileSize,
+    );
     await this.requireWritableFolder(dto.folderId, userId);
 
     const safeName = this.sanitizeFileName(dto.fileName);
     const key = this.r2Service.generateKey(safeName, userId);
 
     const partSize = dto.partSize ?? this.multipartPartSize;
-    const expectedPartCount = this.getMultipartPartCount(dto.fileSize, partSize);
+    const expectedPartCount = this.getMultipartPartCount(
+      dto.fileSize,
+      partSize,
+    );
 
     if (dto.partCount && dto.partCount !== expectedPartCount) {
       throw new BadRequestException(
@@ -184,7 +231,7 @@ export class UploadService {
       );
     }
 
-    const uploadId = await this.r2Service.createMultipartUpload(key, dto.mimeType);
+    const uploadId = await this.r2Service.createMultipartUpload(key, mimeType);
 
     let partUrls: { partNumber: number; uploadUrl: string }[] | undefined;
 
@@ -194,7 +241,11 @@ export class UploadService {
         this.presignConcurrency,
         async (_, i) => ({
           partNumber: i + 1,
-          uploadUrl: await this.r2Service.generatePresignedPartUrl(key, uploadId, i + 1),
+          uploadUrl: await this.r2Service.generatePresignedPartUrl(
+            key,
+            uploadId,
+            i + 1,
+          ),
         }),
       );
     }
@@ -202,10 +253,12 @@ export class UploadService {
     const fileId = new Types.ObjectId().toHexString();
     const session = await this.uploadSessionModel.create({
       userId: new Types.ObjectId(userId),
-      organizationId: organizationId ? new Types.ObjectId(organizationId) : null,
+      organizationId: organizationId
+        ? new Types.ObjectId(organizationId)
+        : null,
       folderId: dto.folderId ? new Types.ObjectId(dto.folderId) : null,
       fileName: dto.fileName,
-      mimeType: dto.mimeType,
+      mimeType,
       size: dto.fileSize,
       storageKey: key,
       uploadId,
@@ -216,7 +269,9 @@ export class UploadService {
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     });
 
-    this.logger.log(`Multipart initiated | user=${userId} | key=${key} | parts=${dto.partCount ?? 'not pre-generated'}`);
+    this.logger.log(
+      `Multipart initiated | user=${userId} | key=${key} | parts=${dto.partCount ?? 'not pre-generated'}`,
+    );
 
     const urls = partUrls?.map((p) => p.uploadUrl) ?? [];
     return {
@@ -236,7 +291,11 @@ export class UploadService {
      Call this endpoint for each part if partCount wasn't provided at initiation.
   ========================= */
   async getPresignedPartUrl(dto: GetPartUrlDto, userId: string) {
-    const session = await this.requireActiveMultipartSession(dto.uploadId, dto.key, userId);
+    const session = await this.requireActiveMultipartSession(
+      dto.uploadId,
+      dto.key,
+      userId,
+    );
     const expectedPartCount = this.getMultipartPartCount(
       session.size,
       this.getSessionPartSize(session),
@@ -252,7 +311,9 @@ export class UploadService {
       dto.partNumber,
     );
 
-    this.logger.log(`Part URL generated | user=${userId} | key=${dto.key} | part=${dto.partNumber}`);
+    this.logger.log(
+      `Part URL generated | user=${userId} | key=${dto.key} | part=${dto.partNumber}`,
+    );
 
     return {
       uploadUrl: partUrl,
@@ -280,7 +341,11 @@ export class UploadService {
       throw new BadRequestException('uploadId and key are required');
     }
 
-    const session = await this.requireActiveMultipartSession(uploadId, key, userId);
+    const session = await this.requireActiveMultipartSession(
+      uploadId,
+      key,
+      userId,
+    );
 
     const etag = await this.r2Service.uploadMultipartPart(
       key,
@@ -289,7 +354,9 @@ export class UploadService {
       file.buffer,
     );
 
-    this.logger.log(`Server part uploaded | user=${userId} | key=${key} | part=${partNumber}`);
+    this.logger.log(
+      `Server part uploaded | user=${userId} | key=${key} | part=${partNumber}`,
+    );
 
     return {
       etag,
@@ -307,14 +374,23 @@ export class UploadService {
       throw new BadRequestException('Parts list cannot be empty');
     }
 
-    const session = await this.requireActiveMultipartSession(dto.uploadId, dto.key, userId);
+    const session = await this.requireActiveMultipartSession(
+      dto.uploadId,
+      dto.key,
+      userId,
+    );
     const expectedPartCount = this.getMultipartPartCount(
       session.size,
       this.getSessionPartSize(session),
     );
     const partNumbers = new Set(dto.parts.map((part) => part.partNumber));
-    if (dto.parts.length !== expectedPartCount || partNumbers.size !== expectedPartCount) {
-      throw new BadRequestException(`Exactly ${expectedPartCount} unique parts are required`);
+    if (
+      dto.parts.length !== expectedPartCount ||
+      partNumbers.size !== expectedPartCount
+    ) {
+      throw new BadRequestException(
+        `Exactly ${expectedPartCount} unique parts are required`,
+      );
     }
     for (let partNumber = 1; partNumber <= expectedPartCount; partNumber += 1) {
       if (!partNumbers.has(partNumber)) {
@@ -322,7 +398,11 @@ export class UploadService {
       }
     }
 
-    await this.r2Service.completeMultipartUpload(dto.uploadId, dto.key, dto.parts);
+    await this.r2Service.completeMultipartUpload(
+      dto.uploadId,
+      dto.key,
+      dto.parts,
+    );
     await this.uploadSessionModel.findOneAndUpdate(
       {
         uploadId: dto.uploadId,
@@ -339,9 +419,14 @@ export class UploadService {
       },
     );
 
-    this.logger.log(`Multipart completed | user=${userId} | key=${dto.key} | parts=${dto.parts.length}`);
+    this.logger.log(
+      `Multipart completed | user=${userId} | key=${dto.key} | parts=${dto.parts.length}`,
+    );
 
-    return { key: dto.key, message: 'Upload complete. Save file metadata via POST /api/v1/files' };
+    return {
+      key: dto.key,
+      message: 'Upload complete. Save file metadata via POST /api/v1/files',
+    };
   }
 
   /* =========================
@@ -376,14 +461,18 @@ export class UploadService {
     folderId: string | undefined,
     userId: string,
   ) {
-    this.validateFile(file.mimetype, file.size);
+    const mimeType = this.validateFile(
+      file.originalname,
+      file.mimetype,
+      file.size,
+    );
     await this.requireWritableFolder(folderId, userId);
 
     const safeName = this.sanitizeFileName(file.originalname);
     const key = this.r2Service.generateKey(safeName, userId);
     const fileId = new Types.ObjectId().toHexString();
 
-    await this.r2Service.uploadObject(key, file.buffer, file.mimetype);
+    await this.r2Service.uploadObject(key, file.buffer, mimeType);
 
     this.logger.log(
       `Direct upload | user=${userId} | file=${file.originalname} | size=${file.size}`,
@@ -394,7 +483,7 @@ export class UploadService {
       fileId,
       originalName: file.originalname,
       size: file.size,
-      mimeType: file.mimetype,
+      mimeType,
       folderId,
     };
   }
@@ -412,14 +501,19 @@ export class UploadService {
     this.validateFolderName(dto.folderName);
 
     const userObjId = new Types.ObjectId(userId);
-    const organizationObjId = organizationId ? new Types.ObjectId(organizationId) : null;
+    const organizationObjId = organizationId
+      ? new Types.ObjectId(organizationId)
+      : null;
 
     // ---- 1. Resolve or create root folder ----
     let parentPath = '/';
     let parentId: Types.ObjectId | null = null;
 
     if (dto.parentFolderId) {
-      const parent = await this.requireWritableFolder(dto.parentFolderId, userId);
+      const parent = await this.requireWritableFolder(
+        dto.parentFolderId,
+        userId,
+      );
       if (!parent) throw new BadRequestException('Parent folder not found');
       parentId = parent._id as Types.ObjectId;
       parentPath = `${parent.path}${parent.name}/`;
@@ -484,7 +578,11 @@ export class UploadService {
       dto.files,
       this.presignConcurrency,
       async (file) => {
-        this.validateFile(file.mimeType, file.fileSize);
+        const mimeType = this.validateFile(
+          file.fileName,
+          file.mimeType,
+          file.fileSize,
+        );
 
         const safeName = this.sanitizeFileName(file.fileName);
         const key = this.r2Service.generateKey(safeName, userId);
@@ -498,14 +596,14 @@ export class UploadService {
         const fileId = new Types.ObjectId().toHexString();
         const useMultipart = file.fileSize >= this.multipartThreshold;
         const uploadId = useMultipart
-          ? await this.r2Service.createMultipartUpload(key, file.mimeType)
+          ? await this.r2Service.createMultipartUpload(key, mimeType)
           : null;
         const uploadUrl = useMultipart
           ? null
           : (
               await this.r2Service.generatePresignedUploadUrl(
                 key,
-                file.mimeType,
+                mimeType,
                 file.fileSize,
               )
             ).uploadUrl;
@@ -517,7 +615,7 @@ export class UploadService {
           organizationId: organizationObjId,
           folderId,
           fileName: file.fileName,
-          mimeType: file.mimeType,
+          mimeType,
           size: file.fileSize,
           storageKey: key,
           uploadId,
@@ -531,7 +629,7 @@ export class UploadService {
           fileId,
           fileName: file.fileName,
           relativePath: file.relativePath ?? file.fileName,
-          mimeType: file.mimeType,
+          mimeType,
           fileSize: file.fileSize,
           key,
           uploadUrl,
@@ -662,7 +760,9 @@ export class UploadService {
       expiresAt: new Date(Date.now() + 60 * 60 * 1000),
     });
 
-    this.logger.log(`Session cancelled | user=${userId} | session=${sessionId}`);
+    this.logger.log(
+      `Session cancelled | user=${userId} | session=${sessionId}`,
+    );
     return { message: 'Upload session cancelled' };
   }
 
@@ -736,7 +836,9 @@ export class UploadService {
       throw new BadRequestException('Folder name contains invalid characters');
     }
     if (name.length > 255) {
-      throw new BadRequestException('Folder name is too long (max 255 characters)');
+      throw new BadRequestException(
+        'Folder name is too long (max 255 characters)',
+      );
     }
   }
 }

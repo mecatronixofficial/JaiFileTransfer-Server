@@ -14,6 +14,8 @@ import {
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 import { MAX_FILE_SIZE } from '../../upload/dto/upload.dto';
+import { ALLOWED_MIME_TYPES } from '../../upload/dto/upload.dto';
+import { normalizeUploadMimeType } from '../../upload/file-type.util';
 
 /* =========================
    SAVE FILE METADATA
@@ -33,6 +35,10 @@ export class SaveFileMetadataDto {
 
   @IsString()
   @IsNotEmpty()
+  @Transform(({ value, obj }) =>
+    normalizeUploadMimeType(obj.originalName, value),
+  )
+  @IsIn(ALLOWED_MIME_TYPES, { message: 'Unsupported MIME type' })
   mimeType: string;
 
   @IsNumber()
@@ -70,7 +76,9 @@ export class SaveFileMetadataDto {
 ========================= */
 export class FileQueryDto {
   @Transform(({ value }) =>
-    value === '' || value === 'null' || value === 'undefined' ? undefined : value,
+    value === '' || value === 'null' || value === 'undefined'
+      ? undefined
+      : value,
   )
   @IsMongoId()
   @IsOptional()
