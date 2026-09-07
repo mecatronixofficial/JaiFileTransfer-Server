@@ -1,6 +1,10 @@
 # 🇮🇳 Jai-India FileTransfer — Enterprise Backend
 
-A production-ready, enterprise-level private file transfer platform built with **NestJS**, **MongoDB**, and **Cloudflare R2**.
+A private file transfer platform built with **NestJS 11**, **MongoDB**, and **Cloudflare R2**.
+
+See [PERFORMANCE.md](PERFORMANCE.md) for the backend update and deployment steps.
+Expired-file cleanup requires Redis and a separate `bun run start:worker` process.
+See [UPLOADS.md](UPLOADS.md) for all-file-type and folder upload integration.
 
 ---
 
@@ -25,7 +29,7 @@ Client
 
 | Layer       | Technology                          |
 |-------------|-------------------------------------|
-| Framework   | NestJS 10 (TypeScript)              |
+| Framework   | NestJS 11 (TypeScript)              |
 | Database    | MongoDB 7 + Mongoose 8              |
 | Storage     | Cloudflare R2 (S3-compatible)       |
 | Auth        | JWT + bcrypt + 2FA OTP              |
@@ -248,7 +252,7 @@ GET    /api/v1/transactions          Audit log (role-filtered)
 
 ### 1. Install dependencies
 ```bash
-npm install
+bun install --frozen-lockfile
 ```
 
 ### 2. Configure environment
@@ -259,18 +263,18 @@ cp .env.example .env
 
 ### 3. Seed SUPERADMIN
 ```bash
-npx ts-node src/seed.ts
+bun run seed
 ```
 
 ### 4. Run in development
 ```bash
-npm run start:dev
+bun run start:dev
 ```
 
 ### 5. Run in production
 ```bash
-npm run build
-npm run start:prod
+bun run build
+bun run start:prod
 ```
 
 ---
@@ -348,7 +352,7 @@ requests sent from the browser to R2.
 - [ ] Set `FRONTEND_URL` for CORS
 - [ ] Use MongoDB Atlas or replica set
 - [ ] Configure R2 bucket CORS for your domain
-- [ ] Enable R2 bucket versioning
+- [ ] Verify R2 recovery/retention settings for your deployment
 - [ ] Set up log aggregation (e.g. Datadog, Logtail)
 - [ ] Configure reverse proxy (Nginx/Caddy)
 - [ ] Run behind HTTPS only

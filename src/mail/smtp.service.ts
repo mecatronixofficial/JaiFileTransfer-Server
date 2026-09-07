@@ -1,9 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import nodemailer, { type SendMailOptions, type Transporter } from 'nodemailer';
 
 @Injectable()
-export class SmtpService {
+export class SmtpService implements OnModuleDestroy {
   private readonly logger = new Logger(SmtpService.name);
   private readonly transporter: Transporter;
   private readonly from: { name: string; address: string };
@@ -22,6 +22,12 @@ export class SmtpService {
       address: this.configService.get<string>('email.from') || user,
     };
     this.transporter = nodemailer.createTransport({
+      pool: true,
+      maxConnections: 3,
+      maxMessages: 100,
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 60000,
       host,
       port,
       secure,
@@ -42,4 +48,6 @@ export class SmtpService {
     this.logger.debug(`SMTP accepted message | id=${info.messageId}`);
     return info.messageId;
   }
+
+  onModuleDestroy() { this.transporter.close(); }
 }

@@ -26,11 +26,7 @@ import { R2Service } from '../r2/r2.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/schemas/notification.schema';
 import { Role, ShareType, ResourceType } from '../common/enums';
-import { ALLOWED_MIME_TYPES } from '../upload/dto/upload.dto';
-import {
-  getUploadBlockReason,
-  normalizeUploadMimeType,
-} from '../upload/file-type.util';
+import { normalizeUploadMimeType } from '../upload/file-type.util';
 
 @Injectable()
 export class FilesService {
@@ -212,14 +208,7 @@ export class FilesService {
     }
 
     const folderId = await this.verifyWritableFolder(dto.folderId, userId);
-    const blockedReason = getUploadBlockReason(dto.originalName);
-    if (blockedReason) throw new BadRequestException(blockedReason);
     const mimeType = normalizeUploadMimeType(dto.originalName, dto.mimeType);
-    if (!ALLOWED_MIME_TYPES.includes(mimeType)) {
-      throw new BadRequestException(
-        `Unsupported file type: ${mimeType}. Use a recognized business file format.`,
-      );
-    }
     const file = await this.fileModel.create({
       ...rest,
       mimeType,
@@ -836,15 +825,23 @@ export class FilesService {
     cutoff.setDate(cutoff.getDate() - retentionDays);
 
     let deletedCount = 0;
+    let failedCount = 0;
+    let lastId: Types.ObjectId | undefined;
     const batchSize = 100;
 
     while (true) {
       const batch = await this.fileModel
-        .find({ isDeleted: true, deletedAt: { $lte: cutoff } })
+        .find({
+          isDeleted: true,
+          deletedAt: { $lte: cutoff },
+          ...(lastId ? { _id: { $gt: lastId } } : {}),
+        })
+        .sort({ _id: 1 })
         .limit(batchSize)
         .lean();
 
       if (!batch.length) break;
+      lastId = batch[batch.length - 1]._id as Types.ObjectId;
 
       for (const file of batch) {
         try {
@@ -852,6 +849,7 @@ export class FilesService {
           await this.fileModel.findByIdAndDelete(file._id);
           deletedCount++;
         } catch (err) {
+          failedCount++;
           this.logger.error(
             `Cron: failed deleting file ${file._id}: ${(err as Error).message}`,
           );
@@ -859,6 +857,11 @@ export class FilesService {
       }
     }
 
+    // Advance through failures once per run; let the queue retry with backoff.
+    // Otherwise a failed first batch can spin forever against storage.
+    if (failedCount) {
+      throw new Error(`Cleanup failed for ${failedCount} file(s); ${deletedCount} deleted`);
+    }
     return deletedCount;
   }
 

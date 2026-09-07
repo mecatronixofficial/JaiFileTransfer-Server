@@ -8,6 +8,7 @@
  */
 
 import 'reflect-metadata';
+import './infrastructure/dns.bootstrap';
 import mongoose, { Schema, Document, Model } from 'mongoose';
 import * as bcrypt from 'bcrypt';
 import * as dotenv from 'dotenv';

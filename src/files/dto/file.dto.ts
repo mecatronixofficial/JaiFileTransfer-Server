@@ -14,7 +14,6 @@ import {
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 import { MAX_FILE_SIZE } from '../../upload/dto/upload.dto';
-import { ALLOWED_MIME_TYPES } from '../../upload/dto/upload.dto';
 import { normalizeUploadMimeType } from '../../upload/file-type.util';
 
 /* =========================
@@ -38,11 +37,10 @@ export class SaveFileMetadataDto {
   @Transform(({ value, obj }) =>
     normalizeUploadMimeType(obj.originalName, value),
   )
-  @IsIn(ALLOWED_MIME_TYPES, { message: 'Unsupported MIME type' })
-  mimeType: string;
+  mimeType: string = 'application/octet-stream';
 
   @IsNumber()
-  @Min(1)
+  @Min(0)
   @Max(MAX_FILE_SIZE)
   @Type(() => Number)
   size: number;

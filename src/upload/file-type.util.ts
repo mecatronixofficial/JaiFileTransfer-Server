@@ -165,41 +165,8 @@ export const MIME_BY_EXTENSION: Readonly<Record<string, string>> =
 export const MIME_TYPE_PATTERN =
   /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i;
 
-const BLOCKED_EXECUTABLE_EXTENSIONS = new Set([
-  'exe',
-  'dll',
-  'msi',
-  'msix',
-  'appx',
-  'appxbundle',
-  'bat',
-  'cmd',
-  'com',
-  'scr',
-  'cpl',
-  'sys',
-  'ps1',
-  'psm1',
-  'vbs',
-  'vbe',
-  'wsf',
-  'wsh',
-  'hta',
-  'lnk',
-  'reg',
-  'pif',
-  'jar',
-  'apk',
-  'ipa',
-  'dmg',
-  'pkg',
-  'deb',
-  'rpm',
-  'appimage',
-]);
-
 export function getFileExtension(fileName: string): string {
-  const baseName = fileName.replace(/\\/g, '/').split('/').pop() ?? '';
+  const baseName = (typeof fileName === 'string' ? fileName : '').replace(/\\/g, '/').split('/').pop() ?? '';
   const dotIndex = baseName.lastIndexOf('.');
   return dotIndex > 0 && dotIndex < baseName.length - 1
     ? baseName.slice(dotIndex + 1).toLowerCase()
@@ -213,16 +180,8 @@ export function normalizeUploadMimeType(
   const extensionMimeType = MIME_BY_EXTENSION[getFileExtension(fileName)];
   if (extensionMimeType) return extensionMimeType;
 
-  const supplied = suppliedMimeType?.split(';', 1)[0]?.trim().toLowerCase();
+  const supplied = (typeof suppliedMimeType === 'string' ? suppliedMimeType : '').split(';', 1)[0]?.trim().toLowerCase();
   return supplied && MIME_TYPE_PATTERN.test(supplied)
     ? supplied
     : 'application/octet-stream';
-}
-
-export function getUploadBlockReason(fileName: string): string | undefined {
-  const extension = getFileExtension(fileName);
-  if (BLOCKED_EXECUTABLE_EXTENSIONS.has(extension)) {
-    return `Executable and installer files (.${extension}) are not allowed.`;
-  }
-  return undefined;
 }

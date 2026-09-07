@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 
@@ -12,6 +12,20 @@ type SearchType = 'file' | 'folder' | 'transfer' | 'link';
 
 @Injectable()
 export class SearchService {
+  private readonly logger = new Logger(SearchService.name);
+
+  private async measured<T>(operation: string, query: { maxTimeMS(ms: number): { exec(): Promise<T> } }): Promise<T> {
+    const started = performance.now();
+    try {
+      return await query.maxTimeMS(3000).exec();
+    } finally {
+      const durationMs = Math.round(performance.now() - started);
+      const measurement = { operation, durationMs };
+      if (durationMs >= 250) this.logger.warn(measurement);
+      else this.logger.debug(measurement);
+    }
+  }
+
   constructor(
     @InjectModel(FileRecord.name) private readonly fileModel: Model<FileDocument>,
     @InjectModel(Folder.name) private readonly folderModel: Model<FolderDocument>,
@@ -92,7 +106,7 @@ export class SearchService {
       links, linkTotal,
     ] = await Promise.all([
       searchFiles
-        ? this.fileModel
+        ? this.measured('file.find', this.fileModel
             .find(fileFilter)
             .select('fileName originalName size mimeType tags uploadedBy folderId createdAt')
             .populate('uploadedBy', 'name email')
@@ -100,41 +114,41 @@ export class SearchService {
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(safeLimit)
-            .lean()
+            .lean())
         : Promise.resolve([]),
 
-      searchFiles ? this.fileModel.countDocuments(fileFilter) : Promise.resolve(0),
+      searchFiles ? this.measured('file.count', this.fileModel.countDocuments(fileFilter)) : Promise.resolve(0),
 
       searchFolders
-        ? this.folderModel
+        ? this.measured('folder.find', this.folderModel
             .find(folderFilter)
             .select('name createdBy createdAt')
             .populate('createdBy', 'name email')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(safeLimit)
-            .lean()
+            .lean())
         : Promise.resolve([]),
 
-      searchFolders ? this.folderModel.countDocuments(folderFilter) : Promise.resolve(0),
+      searchFolders ? this.measured('folder.count', this.folderModel.countDocuments(folderFilter)) : Promise.resolve(0),
 
       searchTransfers
-        ? this.transferModel
+        ? this.measured('transfer.find', this.transferModel
             .find(transferFilter)
             .select('title method recipients status expiresAt senderId totalSize fileCount folderCount createdAt')
             .populate('senderId', 'name email')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(safeLimit)
-            .lean()
+            .lean())
         : Promise.resolve([]),
 
       searchTransfers
-        ? this.transferModel.countDocuments(transferFilter)
+        ? this.measured('transfer.count', this.transferModel.countDocuments(transferFilter))
         : Promise.resolve(0),
 
       searchLinks
-        ? this.linkModel
+        ? this.measured('link.find', this.linkModel
             .find(linkFilter)
             .select('shortCode url status senderId transferId fileCount totalSize expiresAt createdAt')
             .populate('senderId', 'name email')
@@ -142,10 +156,10 @@ export class SearchService {
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(safeLimit)
-            .lean()
+            .lean())
         : Promise.resolve([]),
 
-      searchLinks ? this.linkModel.countDocuments(linkFilter) : Promise.resolve(0),
+      searchLinks ? this.measured('link.count', this.linkModel.countDocuments(linkFilter)) : Promise.resolve(0),
     ]);
 
     const total = fileTotal + folderTotal + transferTotal + linkTotal;

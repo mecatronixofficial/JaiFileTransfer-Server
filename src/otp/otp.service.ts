@@ -326,7 +326,7 @@ export class OtpService implements OnModuleDestroy {
 
           <!-- Header -->
           <tr>
-            <td style="background:${config.accentColor};padding:28px 32px;text-align:center">
+            <td bgcolor="#fcaa01" style="background-color:#fcaa01;padding:28px 32px;text-align:center">
               <p style="margin:0;font-size:22px;font-weight:700;color:#fff;letter-spacing:.5px">
                 Jai Export Enterprises
               </p>

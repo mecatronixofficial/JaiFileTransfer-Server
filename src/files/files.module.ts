@@ -3,7 +3,6 @@ import { MongooseModule } from '@nestjs/mongoose';
 
 import { FilesService } from './files.service';
 import { FilesController } from './files.controller';
-import { FilesCronService } from './files.cron.service';
 
 import { FileRecord, FileSchema } from './schemas/file.schema';
 import { Share, ShareSchema } from '../shares/schemas/share.schema';
@@ -25,7 +24,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     NotificationsModule,
   ],
   controllers: [FilesController],
-  providers: [FilesService, FilesCronService],
+  providers: [FilesService],
   exports: [FilesService, MongooseModule],
 })
 export class FilesModule {}

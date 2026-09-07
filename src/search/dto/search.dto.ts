@@ -2,6 +2,7 @@ import {
   IsString,
   IsNotEmpty,
   MinLength,
+  MaxLength,
   IsOptional,
   IsInt,
   Min,
@@ -14,6 +15,7 @@ export class SearchQueryDto {
   @IsString()
   @IsNotEmpty()
   @MinLength(2)
+  @MaxLength(200)
   q: string;
 
   @IsOptional()
