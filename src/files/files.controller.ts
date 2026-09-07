@@ -31,11 +31,12 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Role } from '../common/enums';
+import { StatsCacheService } from '../infrastructure/stats-cache.service';
 
 @Controller('files')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class FilesController {
-  constructor(private readonly filesService: FilesService) {}
+  constructor(private readonly filesService: FilesService, private readonly statsCache: StatsCacheService) {}
 
   /* ──────────────────────────────────────────────
      STATIC ROUTES  (must precede /:id)
@@ -59,7 +60,7 @@ export class FilesController {
   @Get('admin/stats')
   @Roles(Role.SUPERADMIN)
   async getAdminStats() {
-    const data = await this.filesService.getAdminStats();
+    const data = await this.statsCache.fileStats(() => this.filesService.getAdminStats());
     return { success: true, message: 'File stats retrieved', data };
   }
 

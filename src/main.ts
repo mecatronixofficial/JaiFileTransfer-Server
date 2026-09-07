@@ -1,3 +1,5 @@
+import 'dotenv/config';
+import './infrastructure/dns.bootstrap';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger, VersioningType } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -6,8 +8,7 @@ import helmet from 'helmet';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
-import * as dns from 'dns';
-dns.setServers(['8.8.8.8', '1.1.1.1']);
+import { Logger as PinoLogger } from 'nestjs-pino';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -25,13 +26,10 @@ async function bootstrap() {
   const frontendUrl = configService.get<string>('app.frontendUrl') ?? 'http://localhost:3000';
   const apiUrl = configService.get<string>('app.apiUrl') ?? `http://localhost:${port}/api/v1`;
 
-  // Switch to verbose logging in development after config is loaded.
-  // bufferLogs:true ensures startup messages are flushed with the new logger.
-  app.useLogger(
-    isProd
-      ? ['log', 'warn', 'error']
-      : ['log', 'debug', 'verbose', 'warn', 'error'],
-  );
+  // Flush startup logs into the structured logger once configuration is loaded.
+  app.useLogger(app.get(PinoLogger));
+  // Preserve Express 4 nested query parsing after upgrading to Express 5.
+  app.getHttpAdapter().getInstance().set('query parser', 'extended');
 
   /* =========================
      TRUST PROXY
@@ -113,7 +111,7 @@ async function bootstrap() {
   /* =========================
      ROUTING
   ========================= */
-  app.setGlobalPrefix('api', { exclude: ['health', '/'] });
+  app.setGlobalPrefix('api', { exclude: ['health', 'health/ready', '/'] });
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
 
   /* =========================
@@ -133,33 +131,11 @@ async function bootstrap() {
      HEALTH CHECK
      Excluded from the /api prefix so it stays at GET /health.
   ========================= */
-  const httpAdapter = app.getHttpAdapter().getInstance();
-  httpAdapter.get('/health', (_req: unknown, res: any) => {
-    res.json({ status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString() });
-  });
 
   /* =========================
      GRACEFUL SHUTDOWN
   ========================= */
   app.enableShutdownHooks();
-
-  const shutdown = async (signal: string) => {
-    logger.log(`${signal} received — shutting down`);
-    try {
-      await app.close();
-      logger.log('Server closed gracefully');
-      process.exit(0);
-    } catch (err) {
-      logger.error(
-        'Error during shutdown',
-        err instanceof Error ? err.stack : String(err),
-      );
-      process.exit(1);
-    }
-  };
-
-  process.on('SIGTERM', () => void shutdown('SIGTERM'));
-  process.on('SIGINT', () => void shutdown('SIGINT'));
 
   process.on('unhandledRejection', (reason: unknown) => {
     logger.error(

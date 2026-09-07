@@ -22,7 +22,7 @@ export class FileRecord {
   @Prop({ required: true })
   mimeType: string;
 
-  @Prop({ required: true, min: 1 })
+  @Prop({ required: true, min: 0 })
   size: number;
 
   @Prop({ required: true, unique: true })

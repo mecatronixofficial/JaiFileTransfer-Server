@@ -701,6 +701,7 @@ export class TransfersService {
           senderName,
           linkUrl,
           dto.message,
+          dto.subject,
           expiresAt,
           !!dto.password,
           {

@@ -20,13 +20,9 @@ import {
   GetPartUrlDto,
   FolderUploadDto,
   GetUploadSessionsDto,
-  ALLOWED_MIME_TYPES,
   MAX_FILE_SIZE,
 } from './dto/upload.dto';
-import {
-  getUploadBlockReason,
-  normalizeUploadMimeType,
-} from './file-type.util';
+import { normalizeUploadMimeType } from './file-type.util';
 
 @Injectable()
 export class UploadService {
@@ -55,14 +51,9 @@ export class UploadService {
     suppliedMimeType: string,
     size: number,
   ): string {
-    const blockedReason = getUploadBlockReason(fileName);
-    if (blockedReason) throw new BadRequestException(blockedReason);
-
     const mimeType = normalizeUploadMimeType(fileName, suppliedMimeType);
-    if (!ALLOWED_MIME_TYPES.includes(mimeType)) {
-      throw new BadRequestException(
-        `Unsupported file type: ${mimeType}. Use a recognized business file format.`,
-      );
+    if (!Number.isSafeInteger(size) || size < 0) {
+      throw new BadRequestException('File size must be a non-negative integer');
     }
     if (size > MAX_FILE_SIZE) {
       throw new BadRequestException(
@@ -193,6 +184,7 @@ export class UploadService {
 
     return {
       url: uploadUrl,
+      mimeType,
       key,
       fileId,
       uploadSessionId: session._id.toString(),
@@ -209,6 +201,9 @@ export class UploadService {
     userId: string,
     organizationId?: string | null,
   ) {
+    if (dto.fileSize === 0) {
+      throw new BadRequestException('Use a single upload for an empty file');
+    }
     const mimeType = this.validateFile(
       dto.fileName,
       dto.mimeType,
@@ -500,6 +495,43 @@ export class UploadService {
   ) {
     this.validateFolderName(dto.folderName);
 
+    // Validate the complete manifest before creating folders or storage uploads.
+    const files = (dto.files ?? []).map((file) => {
+      this.validateFolderName(file.fileName);
+      const relativePath = this.normalizeRelativePath(
+        file.relativePath ?? file.fileName,
+      );
+      if (relativePath.split('/').pop() !== file.fileName) {
+        throw new BadRequestException('Relative path must end with the file name');
+      }
+      return {
+        ...file,
+        relativePath,
+        mimeType: this.validateFile(file.fileName, file.mimeType, file.fileSize),
+      };
+    });
+    const filePaths = new Set(files.map((file) => file.relativePath));
+    if (filePaths.size !== files.length) {
+      throw new BadRequestException('Duplicate file paths are not allowed');
+    }
+    const subfolderPaths = new Set<string>();
+    const addDirectory = (path: string) => {
+      const segments = path.split('/');
+      for (let i = 1; i <= segments.length; i++) {
+        subfolderPaths.add(segments.slice(0, i).join('/'));
+      }
+    };
+    for (const path of dto.directories ?? []) {
+      addDirectory(this.normalizeRelativePath(path));
+    }
+    for (const file of files) {
+      const directory = file.relativePath.split('/').slice(0, -1).join('/');
+      if (directory) addDirectory(directory);
+    }
+    if ([...subfolderPaths].some((path) => filePaths.has(path))) {
+      throw new BadRequestException('A path cannot be both a file and a directory');
+    }
+
     const userObjId = new Types.ObjectId(userId);
     const organizationObjId = organizationId
       ? new Types.ObjectId(organizationId)
@@ -536,20 +568,6 @@ export class UploadService {
     // '' key = root folder
     subfolderMap.set('', rootFolderId);
 
-    const subfolderPaths = new Set<string>();
-    for (const file of dto.files) {
-      if (file.relativePath) {
-        const parts = file.relativePath.split('/');
-        // Each directory segment is a potential subfolder
-        if (parts.length > 1) {
-          for (let i = 1; i < parts.length; i++) {
-            const dirPath = parts.slice(0, i).join('/');
-            if (dirPath) subfolderPaths.add(dirPath);
-          }
-        }
-      }
-    }
-
     // ---- 3. Create subfolders (sorted so parents come before children) ----
     const sortedPaths = Array.from(subfolderPaths).sort(
       (a, b) => a.split('/').length - b.split('/').length,
@@ -575,7 +593,7 @@ export class UploadService {
 
     // ---- 4. Generate presigned URLs for each file ----
     const fileResults = await this.mapWithConcurrency(
-      dto.files,
+      files,
       this.presignConcurrency,
       async (file) => {
         const mimeType = this.validateFile(
@@ -645,7 +663,7 @@ export class UploadService {
     );
 
     this.logger.log(
-      `Folder upload initiated | user=${userId} | folder="${dto.folderName}" | files=${dto.files.length}`,
+      `Folder upload initiated | user=${userId} | folder="${dto.folderName}" | files=${files.length}`,
     );
 
     return {
@@ -655,7 +673,9 @@ export class UploadService {
         path: rootPath,
       },
       files: fileResults,
-      message: `Upload ${dto.files.length} file(s). When done, save each file's metadata via POST /api/v1/files/batch`,
+      message: files.length
+        ? `Upload ${files.length} file(s). When done, save each file's metadata via POST /api/v1/files/batch`
+        : 'Folder hierarchy created',
     };
   }
 
@@ -832,7 +852,7 @@ export class UploadService {
     if (!name || !name.trim()) {
       throw new BadRequestException('Folder name cannot be empty');
     }
-    if (name.includes('..') || name.includes('/') || name.includes('\\')) {
+    if (name === '.' || name === '..' || /[/\\\u0000-\u001f\u007f]/.test(name)) {
       throw new BadRequestException('Folder name contains invalid characters');
     }
     if (name.length > 255) {
@@ -840,5 +860,16 @@ export class UploadService {
         'Folder name is too long (max 255 characters)',
       );
     }
+  }
+
+  private normalizeRelativePath(path: string): string {
+    const normalized = path.replace(/\\/g, '/');
+    if (/^[a-z]:/i.test(normalized)) {
+      throw new BadRequestException('Upload paths must be relative to the root folder');
+    }
+    for (const segment of normalized.split('/')) {
+      this.validateFolderName(segment);
+    }
+    return normalized;
   }
 }

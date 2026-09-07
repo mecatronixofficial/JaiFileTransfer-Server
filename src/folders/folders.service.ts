@@ -158,20 +158,24 @@ export class FoldersService {
       .sort({ name: 1 })
       .lean();
 
-    const subfolders = await Promise.all(
-      rawSubfolders.map(async (sub) => {
-        const [fileCount, subfolderCount] = await Promise.all([
-          this.fileModel.countDocuments({
-            folderId: sub._id,
-            isDeleted: false,
-            ...this.fileOwnerFilter(user),
-          }),
-          this.folderModel.countDocuments({
-            parentId: sub._id,
-            isDeleted: false,
-            ...this.ownerFilter(user),
-          }),
-        ]);
+    const subfolderIds = rawSubfolders.map((sub) => sub._id);
+    const [fileCounts, folderCounts] = subfolderIds.length
+      ? await Promise.all([
+          this.fileModel.aggregate<{ _id: Types.ObjectId; count: number }>([
+            { $match: { folderId: { $in: subfolderIds }, isDeleted: false, ...this.fileOwnerFilter(user) } },
+            { $group: { _id: '$folderId', count: { $sum: 1 } } },
+          ]),
+          this.folderModel.aggregate<{ _id: Types.ObjectId; count: number }>([
+            { $match: { parentId: { $in: subfolderIds }, isDeleted: false, ...this.ownerFilter(user) } },
+            { $group: { _id: '$parentId', count: { $sum: 1 } } },
+          ]),
+        ])
+      : [[], []];
+    const filesByFolder = new Map(fileCounts.map((row) => [row._id.toString(), row.count]));
+    const childrenByFolder = new Map(folderCounts.map((row) => [row._id.toString(), row.count]));
+    const subfolders = rawSubfolders.map((sub) => {
+        const fileCount = filesByFolder.get(sub._id.toString()) ?? 0;
+        const subfolderCount = childrenByFolder.get(sub._id.toString()) ?? 0;
         return {
           id: (sub._id as any).toString(),
           name: sub.name,
@@ -185,8 +189,7 @@ export class FoldersService {
           subfolderCount,
           hasChildren: fileCount > 0 || subfolderCount > 0,
         };
-      }),
-    );
+      });
 
     /* Files directly in this folder */
     const files = await this.fileModel

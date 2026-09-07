@@ -1,21 +1,12 @@
-import { Module, Logger } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { MongooseModule } from '@nestjs/mongoose';
+import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD, APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 
-import {
-  appConfig,
-  jwtConfig,
-  mongoConfig,
-  r2Config,
-  emailConfig,
-  otpConfig,
-  filesConfig,
-  throttleConfig,
-  cronConfig,
-} from './config/configuration';
+import { RuntimeModule } from './infrastructure/runtime.module';
+import { HealthModule } from './health/health.module';
+import { CacheInvalidationInterceptor } from './infrastructure/cache-invalidation.interceptor';
 
 import { R2Module } from './r2/r2.module';
 import { MailModule } from './mail/mail.module';
@@ -38,66 +29,10 @@ import { RolesGuard } from './common/guards/roles.guard';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 
-const dbLogger = new Logger('MongoDB');
-
 @Module({
   imports: [
-    /* =========================
-       CONFIG — global; must be first so all modules can inject ConfigService
-    ========================= */
-    ConfigModule.forRoot({
-      isGlobal: true,
-      envFilePath: '.env',
-      load: [
-        appConfig,
-        jwtConfig,
-        mongoConfig,
-        r2Config,
-        emailConfig,
-        otpConfig,
-        filesConfig,
-        throttleConfig,
-        cronConfig,
-      ],
-    }),
-
-    /* =========================
-       DATABASE
-    ========================= */
-    MongooseModule.forRootAsync({
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => {
-        const uri = config.get<string>('mongo.uri');
-        if (!uri) throw new Error('MongoDB URI missing in environment');
-
-        return {
-          uri,
-          serverSelectionTimeoutMS: Number(
-            process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS ?? 8000,
-          ),
-          connectTimeoutMS: Number(process.env.MONGODB_CONNECT_TIMEOUT_MS ?? 8000),
-          connectionFactory: (connection) => {
-            connection.on('connected', () => dbLogger.log('Connected'));
-            connection.on('disconnected', () => dbLogger.warn('Disconnected'));
-            connection.on('reconnected', () => dbLogger.log('Reconnected'));
-            connection.on('error', (err: unknown) =>
-              dbLogger.error(
-                'Connection error',
-                err instanceof Error ? err.stack : String(err),
-              ),
-            );
-            return connection;
-          },
-        };
-      },
-    }),
-
-    /* =========================
-       RATE LIMITING
-       Default: 100 req / 60 s per IP.
-       Per-route overrides via @Throttle(). Sensitive routes (login, OTP)
-       declare their own tighter limits.
-    ========================= */
+    RuntimeModule,
+    HealthModule,
     ThrottlerModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
@@ -107,7 +42,6 @@ const dbLogger = new Logger('MongoDB');
             limit: config.get<number>('throttle.limit') ?? 100,
           },
         ],
-        ignoreUserAgents: [/health-check/i, /uptime-robot/i, /prometheus/i],
       }),
     }),
 
@@ -149,6 +83,7 @@ const dbLogger = new Logger('MongoDB');
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
 
     { provide: APP_INTERCEPTOR, useClass: TransformInterceptor },
+    { provide: APP_INTERCEPTOR, useClass: CacheInvalidationInterceptor },
   ],
 })
 export class AppModule {}

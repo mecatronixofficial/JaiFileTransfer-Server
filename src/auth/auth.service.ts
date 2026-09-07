@@ -5,7 +5,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { JwtService } from '@nestjs/jwt';
+import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 
 import { UsersService } from '../users/users.service';
@@ -38,8 +38,8 @@ export class AuthService {
   private readonly audience: string;
   private readonly accessSecret: string;
   private readonly refreshSecret: string;
-  private readonly accessTokenExpiry: string;
-  private readonly refreshTokenExpiry: string;
+  private readonly accessTokenExpiry: JwtSignOptions['expiresIn'];
+  private readonly refreshTokenExpiry: JwtSignOptions['expiresIn'];
 
   constructor(
     private readonly usersService: UsersService,
@@ -50,9 +50,9 @@ export class AuthService {
     this.issuer = this.configService.get<string>('jwt.issuer') ?? 'jai-india-api';
     this.audience = this.configService.get<string>('jwt.audience') ?? 'jai-india-users';
     this.accessTokenExpiry =
-      this.configService.get<string>('jwt.accessTokenExpiry') ?? DEFAULT_ACCESS_TOKEN_EXPIRY;
+      this.configService.get<JwtSignOptions['expiresIn']>('jwt.accessTokenExpiry') ?? DEFAULT_ACCESS_TOKEN_EXPIRY;
     this.refreshTokenExpiry =
-      this.configService.get<string>('jwt.refreshTokenExpiry') ?? DEFAULT_REFRESH_TOKEN_EXPIRY;
+      this.configService.get<JwtSignOptions['expiresIn']>('jwt.refreshTokenExpiry') ?? DEFAULT_REFRESH_TOKEN_EXPIRY;
 
     // Use separate secrets for access vs refresh if available, otherwise
     // fall back to a shared secret. Two secrets is stronger — leaking your

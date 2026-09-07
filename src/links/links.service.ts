@@ -405,6 +405,7 @@ export class LinksService {
         currentUser.name ?? currentUser.email ?? 'A Jai Export Enterprises user',
         url,
         null,
+        null,
         expiresAt ?? undefined,
         Boolean(passwordHash),
           {
