@@ -81,3 +81,19 @@ do not update the frontend picker. Keep file uploads concurrent with a bounded
 limit instead of sending the whole folder through the server-buffered endpoint.
 
 Live browser-to-R2 uploads require the existing bucket CORS configuration.
+
+## Storage CORS (required for live uploads)
+
+Browsers PUT file bytes directly to presigned R2 URLs, so the bucket CORS policy
+must allow the frontend origin and expose `ETag` (multipart completion needs it):
+
+```json
+[{ "AllowedOrigins": ["https://your-frontend.example"], "AllowedMethods": ["GET", "HEAD", "PUT"],
+   "AllowedHeaders": ["*"], "ExposeHeaders": ["ETag"], "MaxAgeSeconds": 86400 }]
+```
+
+On startup the server tries to apply this automatically for `FRONTEND_URL`,
+`CORS_ORIGINS` and `R2_CORS_ORIGINS` (requires an R2 token with bucket-admin
+permission; disable with `R2_AUTO_CORS=false`). A superadmin can re-run it with
+`POST /api/v1/upload/admin/storage-cors`. If it cannot, the server logs the exact
+policy to paste into Cloudflare → R2 → bucket → Settings → CORS Policy.
