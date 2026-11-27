@@ -18,6 +18,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 
 import { UploadService } from './upload.service';
 import { FilesService } from '../files/files.service';
+import { R2Service } from '../r2/r2.service';
 import { TransfersService } from '../transfers/transfers.service';
 import {
   PresignedUrlDto,
@@ -52,6 +53,7 @@ export class UploadController {
     private readonly uploadService: UploadService,
     private readonly filesService: FilesService,
     private readonly transfersService: TransfersService,
+    private readonly r2Service: R2Service,
   ) {}
 
   /* =========================
@@ -355,6 +357,24 @@ export class UploadController {
       user._id.toString(),
     );
     return { success: true, ...result };
+  }
+
+  /* =========================
+     SUPERADMIN — SYNC R2 BUCKET CORS
+     Re-applies the browser upload CORS rule (FRONTEND_URL + CORS_ORIGINS).
+  ========================= */
+  @Post('admin/storage-cors')
+  @HttpCode(HttpStatus.OK)
+  @Roles(Role.SUPERADMIN)
+  async syncStorageCors() {
+    const data = await this.r2Service.ensureBucketCors();
+    return {
+      success: true,
+      message: data.updated
+        ? 'Storage CORS updated'
+        : 'Storage CORS unchanged (already valid, or the R2 token lacks bucket-admin permission — see server logs)',
+      data,
+    };
   }
 
   /* =========================

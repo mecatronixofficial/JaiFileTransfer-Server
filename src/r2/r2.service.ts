@@ -2,6 +2,7 @@ import type { Readable } from 'stream';
 import {
   Injectable,
   Logger,
+  OnApplicationBootstrap,
   InternalServerErrorException,
   BadRequestException,
   NotFoundException,
@@ -19,6 +20,9 @@ import {
   CompleteMultipartUploadCommand,
   AbortMultipartUploadCommand,
   CopyObjectCommand,
+  GetBucketCorsCommand,
+  PutBucketCorsCommand,
+  type CORSRule,
 } from '@aws-sdk/client-s3';
 
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -26,7 +30,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { MAX_FILE_SIZE } from '../upload/dto/upload.dto';
 
 @Injectable()
-export class R2Service {
+export class R2Service implements OnApplicationBootstrap {
   private readonly logger = new Logger(R2Service.name);
   private readonly client: S3Client;
   private readonly bucketName: string;
@@ -61,6 +65,118 @@ export class R2Service {
       endpoint,
       credentials: { accessKeyId, secretAccessKey },
     });
+  }
+
+  /* =========================
+     BUCKET CORS (browser → R2 direct uploads)
+     Browsers PUT file bytes straight to presigned R2 URLs. That only works
+     when the bucket's CORS policy allows the frontend origin and exposes the
+     ETag header (needed to complete multipart uploads). Without it, live
+     uploads fail with ERR_NETWORK while localhost may still work.
+     Best effort: the R2 token needs bucket-admin rights; otherwise we only
+     log what to configure manually. Disable with R2_AUTO_CORS=false.
+  ========================= */
+  onApplicationBootstrap(): void {
+    if (process.env.R2_AUTO_CORS === 'false') return;
+    // Never block startup / cold starts on this.
+    void this.ensureBucketCors().catch(() => undefined);
+  }
+
+  getUploadCorsOrigins(): string[] {
+    const frontendUrl = this.configService.get<string>('app.frontendUrl');
+    const extra = [
+      process.env.CORS_ORIGINS,
+      process.env.R2_CORS_ORIGINS,
+    ]
+      .filter(Boolean)
+      .join(',')
+      .split(',');
+    return [
+      ...new Set(
+        [frontendUrl, ...extra, 'http://localhost:3000', 'http://127.0.0.1:3000']
+          .map((origin) => origin?.trim().replace(/\/+$/, ''))
+          .filter((origin): origin is string => Boolean(origin)),
+      ),
+    ];
+  }
+
+  async ensureBucketCors(): Promise<{ updated: boolean; origins: string[] }> {
+    const origins = this.getUploadCorsOrigins();
+    const requiredMethods = ['GET', 'HEAD', 'PUT'];
+
+    let existing: CORSRule[] = [];
+    try {
+      const res = await this.client.send(
+        new GetBucketCorsCommand({ Bucket: this.bucketName }),
+      );
+      existing = res.CORSRules ?? [];
+    } catch (error) {
+      const name = (error as { name?: string })?.name ?? '';
+      // NoSuchCORSConfiguration simply means nothing is configured yet.
+      if (!/NoSuchCORS/i.test(name)) {
+        this.logCorsHelp(origins, error);
+        return { updated: false, origins };
+      }
+    }
+
+    const covers = (rule: CORSRule, origin: string) =>
+      (rule.AllowedOrigins ?? []).some((o) => o === '*' || o === origin) &&
+      requiredMethods.every((m) => rule.AllowedMethods?.includes(m)) &&
+      (rule.AllowedHeaders ?? []).includes('*') &&
+      (rule.ExposeHeaders ?? []).some((h) => h.toLowerCase() === 'etag');
+
+    const missing = origins.filter(
+      (origin) => !existing.some((rule) => covers(rule, origin)),
+    );
+    if (missing.length === 0) return { updated: false, origins };
+
+    const uploadRule: CORSRule = {
+      ID: 'jai-file-transfer-browser-uploads',
+      AllowedOrigins: origins,
+      AllowedMethods: requiredMethods,
+      AllowedHeaders: ['*'],
+      ExposeHeaders: ['ETag', 'Content-Length', 'Content-Type'],
+      MaxAgeSeconds: 86_400,
+    };
+
+    try {
+      await this.client.send(
+        new PutBucketCorsCommand({
+          Bucket: this.bucketName,
+          CORSConfiguration: {
+            // Keep unrelated rules, replace our own managed rule.
+            CORSRules: [
+              ...existing.filter((rule) => rule.ID !== uploadRule.ID),
+              uploadRule,
+            ],
+          },
+        }),
+      );
+      this.logger.log(`R2 bucket CORS updated for: ${origins.join(', ')}`);
+      return { updated: true, origins };
+    } catch (error) {
+      this.logCorsHelp(origins, error);
+      return { updated: false, origins };
+    }
+  }
+
+  private logCorsHelp(origins: string[], error: unknown): void {
+    this.logger.warn(
+      [
+        `Could not verify/update R2 bucket CORS (${(error as Error)?.message ?? error}).`,
+        'Browser uploads on the live site will fail until the bucket allows the frontend origin.',
+        `In Cloudflare → R2 → ${this.bucketName} → Settings → CORS Policy, set:`,
+        JSON.stringify([
+          {
+            AllowedOrigins: origins,
+            AllowedMethods: ['GET', 'HEAD', 'PUT'],
+            AllowedHeaders: ['*'],
+            ExposeHeaders: ['ETag'],
+            MaxAgeSeconds: 86400,
+          },
+        ]),
+      ].join(' '),
+    );
   }
 
   getPresignedUploadExpiry(): number {
